@@ -32,13 +32,18 @@ export async function carregarBase(tx: Tx, clienteId: string, ate: Date): Promis
 
 export const fimDoMes = (competencia: Date) => new Date(Date.UTC(competencia.getUTCFullYear(), competencia.getUTCMonth() + 1, 0));
 
-/** Contas de caixa e equivalentes com saldo ou movimento no mês: exigem justificativa para fechar (até a fase 4). */
+/**
+ * Contas de caixa e equivalentes com saldo ou movimento no mês que NÃO estão
+ * ligadas a uma conta bancária: exigem justificativa para fechar (ex.: caixa
+ * físico). As ligadas exigem a conciliação do mês fechada.
+ */
 export async function contasQuePedemJustificativa(tx: Tx, clienteId: string, competencia: Date) {
   const fim = fimDoMes(competencia);
   const { contas, partidas } = await carregarBase(tx, clienteId, fim);
   const s = calcularSaldos(contas, partidas, competencia, fim);
+  const ligadas = new Set((await tx.contaBancaria.findMany({ where: { clienteId, contaContabilId: { not: null } }, select: { contaContabilId: true } })).map((b) => b.contaContabilId!));
   return contas
-    .filter((c) => c.disponivel && c.analitica)
+    .filter((c) => c.disponivel && c.analitica && !ligadas.has(c.id))
     .map((c) => ({ conta: c, mov: s.get(c.id)! }))
     .filter(({ mov }) => mov.anterior !== 0n || mov.debitos !== 0n || mov.creditos !== 0n);
 }
@@ -76,6 +81,14 @@ export async function mudarSituacaoPeriodo(tx: Tx, autor: Autor, clienteId: stri
     if (anteriorAberto) throw new ErroDeNegocio(`Feche antes ${rotuloCompetencia(anteriorAberto.competencia)}: os meses são fechados em ordem.`);
     const { contas, partidas } = await carregarBase(tx, clienteId, fimDoMes(periodo.competencia));
     if (!balanceteFecha(contas, partidas, fimDoMes(periodo.competencia))) throw new ErroDeNegocio("O balancete não fecha. Corrija antes de fechar.");
+    // Contas bancárias ligadas à contabilidade: a conciliação do mês precisa estar fechada.
+    const bancos = await tx.contaBancaria.findMany({ where: { clienteId, contaContabilId: { not: null }, dataSaldoInicial: { lte: fimDoMes(periodo.competencia) } } });
+    const semConciliar: string[] = [];
+    for (const b of bancos) {
+      const f = await tx.fechamentoConciliacao.findUnique({ where: { contaBancariaId_competencia: { contaBancariaId: b.id, competencia: periodo.competencia } } });
+      if (!f?.fechado) semConciliar.push(b.nome);
+    }
+    if (semConciliar.length) throw new ErroDeNegocio(`Feche antes a conciliação bancária do mês de: ${semConciliar.join(", ")}.`);
     const pendentes = await contasQuePedemJustificativa(tx, clienteId, periodo.competencia);
     const faltando = pendentes.filter(({ conta }) => !(e.justificativasContas?.[conta.id] ?? "").trim());
     if (faltando.length) {
