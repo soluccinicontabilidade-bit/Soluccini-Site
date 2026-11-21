@@ -56,7 +56,7 @@ class S3 implements Armazenamento {
 
 let instancia: Armazenamento | null = null;
 function armazenamento(): Armazenamento {
-  instancia ??= process.env.ARMAZENAMENTO === "s3" ? new S3() : new Local(path.resolve(process.env.ARMAZENAMENTO_DIR || ".armazenamento"));
+  instancia ??= process.env.ARMAZENAMENTO === "s3" ? new S3() : new Local(path.resolve(/*turbopackIgnore: true*/ process.env.ARMAZENAMENTO_DIR || ".armazenamento"));
   return instancia;
 }
 
