@@ -1,3 +1,11 @@
 node_modules/
+.next/
+out/
 .env
 .env.*
+!.env.example
+.armazenamento/
+test-results/
+playwright-report/
+next-env.d.ts
+*.tsbuildinfo

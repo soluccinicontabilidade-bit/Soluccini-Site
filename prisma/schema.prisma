@@ -98,6 +98,7 @@ model Sessao {
   userAgent     String?   @map("user_agent")
   doisFatoresOk Boolean   @default(false) @map("dois_fatores_ok")
   expiraEm      DateTime  @map("expira_em") @db.Timestamptz(3)
+  ultimoUsoEm   DateTime  @default(now()) @map("ultimo_uso_em") @db.Timestamptz(3)
   revogadaEm    DateTime? @map("revogada_em") @db.Timestamptz(3)
   criadaEm      DateTime  @default(now()) @map("criada_em") @db.Timestamptz(3)
 
