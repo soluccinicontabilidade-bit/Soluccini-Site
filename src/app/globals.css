@@ -160,7 +160,7 @@ a { color: var(--destaque-texto); text-underline-offset: 3px; }
 .botao.texto { background: none; color: var(--destaque-texto); padding: 6px 8px; min-height: 36px; }
 
 .campos { display: grid; gap: 16px; }
-@media (min-width: 720px) { .campos-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .campos-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .ocupa-tudo { grid-column: 1 / -1; } }
+@media (min-width: 720px) { .campos-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .campos-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .ocupa-tudo { grid-column: 1 / -1; } .ocupa-2 { grid-column: span 2; } }
 .campo { display: grid; gap: 6px; align-content: start; }
 .campo label, .rotulo-campo { font-weight: 600; font-size: 14px; }
 .campo .ajuda { font-size: 13px; color: var(--texto-suave); }
@@ -268,3 +268,30 @@ details.painel-form > div { padding: 16px; }
   body { background: #fff; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- Contabilidade ---------- */
+.partida-linha { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie-2); }
+@media (max-width: 899px) {
+  .partida-linha > :nth-child(1) { order: 1; }
+  .partida-linha > :nth-child(3) { order: 2; }
+  .partida-linha > :nth-child(2) { order: 3; grid-column: 1 / -1; }
+  .partida-linha > :nth-child(4) { order: 4; grid-column: 1 / -1; }
+  .partida-linha > :nth-child(5) { order: 5; grid-column: 1 / -1; justify-self: end; }
+}
+@media (min-width: 900px) {
+  .partida-linha { grid-template-columns: 120px minmax(0, 3fr) 150px minmax(0, 2fr) 44px; align-items: start; padding: 8px; border: 0; background: none; }
+  .partida-linha + .partida-linha label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .partida-linha .botao.texto { margin-top: 28px; }
+  .partida-linha + .partida-linha .botao.texto { margin-top: 4px; }
+}
+input.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.relatorio td { padding: 8px 12px; }
+table.relatorio .linha-grupo td { font-weight: 700; color: var(--destaque-texto); }
+table.relatorio .linha-subtotal td { font-weight: 600; }
+table.relatorio .linha-total td { font-weight: 700; background: var(--superficie-2); border-top: 2px solid var(--borda-forte); }
+.meses { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.meses strong { font-family: var(--fonte-titulo); font-size: 18px; min-width: 96px; text-align: center; }
+@media print {
+  .abas, .cabecalho .botao, form.filtros-relatorio, .exportar { display: none !important; }
+  .cartao { box-shadow: none; border: 0; padding: 0; }
+}

@@ -181,3 +181,13 @@ describe("fluxo de caixa: rateio", () => {
     expect(f.alerta).toBeUndefined();
   });
 });
+
+describe("fluxo de caixa: saldos iniciais", () => {
+  it("o lançamento de saldo inicial compõe o saldo inicial, não vira entrada", () => {
+    const f = fluxoDeCaixa(contas, partidas, d("2026-01-01"), d("2026-02-28"));
+    expect(f.saldoInicial).toBe(1000000n);
+    expect(f.variacao).toBe(120000n);
+    expect(f.linhas.some((l) => String(l.celulas[0]).startsWith("2.3"))).toBe(false);
+    expect(f.alerta).toBeUndefined();
+  });
+});

@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Briefcase, FileUp, LayoutDashboard, UserCog, Users, UserRound } from "lucide-react";
+import { BookOpenCheck, Briefcase, FileUp, LayoutDashboard, UserCog, Users, UserRound } from "lucide-react";
 
-const ICONES = { painel: LayoutDashboard, clientes: Users, carteiras: Briefcase, equipe: UserCog, importar: FileUp, conta: UserRound };
+const ICONES = { contabil: BookOpenCheck, painel: LayoutDashboard, clientes: Users, carteiras: Briefcase, equipe: UserCog, importar: FileUp, conta: UserRound };
 export type ItemNav = { href: string; rotulo: string; icone: keyof typeof ICONES; curto?: string };
 
 function ativo(caminho: string, href: string) {

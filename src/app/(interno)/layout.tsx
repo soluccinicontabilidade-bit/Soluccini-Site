@@ -13,6 +13,7 @@ export default async function LayoutInterno({ children }: { children: React.Reac
   const itens: ItemNav[] = [
     { href: "/", rotulo: "Painel", icone: "painel" },
     { href: "/clientes", rotulo: "Clientes", icone: "clientes" },
+    { href: "/contabilidade", rotulo: "Contabilidade", curto: "Contábil", icone: "contabil" },
     ...(pode(usuario.perfil, "importacao.clientes") ? [{ href: "/importacoes", rotulo: "Importar planilhas", curto: "Importar", icone: "importar" as const }] : []),
     ...(pode(usuario.perfil, "carteiras.gerenciar") ? [{ href: "/carteiras", rotulo: "Carteiras", icone: "carteiras" as const }] : []),
     ...(pode(usuario.perfil, "usuarios.gerenciar") ? [{ href: "/equipe", rotulo: "Equipe", icone: "equipe" as const }] : []),

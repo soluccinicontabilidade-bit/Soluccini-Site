@@ -18,7 +18,13 @@ export type Acao =
   | "contratos.editar"
   | "documentos.enviar"
   | "importacao.clientes"
-  | "area.interna";
+  | "area.interna"
+  | "contabil.ver"
+  | "contabil.lancar"
+  | "contabil.plano"
+  | "contabil.conferencia"
+  | "contabil.fechar"
+  | "contabil.importar";
 
 const INTERNOS: PerfilUsuario[] = ["ADMINISTRADOR", "CONTADOR", "ANALISTA_BPO", "ANALISTA_IRPF"];
 
@@ -32,6 +38,12 @@ const REGRAS: Record<Acao, PerfilUsuario[]> = {
   "documentos.enviar": INTERNOS,
   "importacao.clientes": ["ADMINISTRADOR", "CONTADOR"],
   "area.interna": INTERNOS,
+  "contabil.ver": INTERNOS,
+  "contabil.lancar": ["ADMINISTRADOR", "CONTADOR", "ANALISTA_BPO"],
+  "contabil.plano": ["ADMINISTRADOR", "CONTADOR"],
+  "contabil.conferencia": ["ADMINISTRADOR", "CONTADOR", "ANALISTA_BPO"],
+  "contabil.fechar": ["CONTADOR"],
+  "contabil.importar": ["ADMINISTRADOR", "CONTADOR"],
 };
 
 export const pode = (perfil: PerfilUsuario, acao: Acao) => REGRAS[acao].includes(perfil);

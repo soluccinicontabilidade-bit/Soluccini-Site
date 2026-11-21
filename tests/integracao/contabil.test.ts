@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { comEscritorio } from "@/lib/db";
+import { comEscritorio, type Tx } from "@/lib/db";
 import { criarCliente } from "@/lib/clientes";
 import { copiarPlanoParaCliente, criarConta, garantirModeloPadrao, importarPlano, criarPlanoVazio } from "@/lib/contabil/plano";
 import { aplicarSaldosIniciais, criarLancamento, editarLancamento, estornarLancamento, lerCompetencia } from "@/lib/contabil/lancamentos";
@@ -64,7 +64,7 @@ describe.skipIf(!temBanco)("contabilidade (banco real)", () => {
     await expect(comEscritorio(e.ctx(e.admin), (tx) => criarLancamento(tx, e.autor(e.admin), e.clienteId, venda("2026-01-20")))).rejects.toThrow(/em conferência/);
     // Administrador não fecha; só o contador.
     await expect(comEscritorio(e.ctx(e.admin), (tx) => mudarSituacaoPeriodo(tx, e.autor(e.admin), e.clienteId, { competencia: jan, para: "FECHADO" }))).rejects.toThrow(/contador/);
-    const C = (fn: Parameters<typeof comEscritorio>[1]) => comEscritorio(e.ctx(e.contador), fn);
+    const C = <T,>(fn: (tx: Tx) => Promise<T>) => comEscritorio(e.ctx(e.contador), fn);
     const ctr = e.autor(e.contador);
     // Fevereiro não fecha antes de janeiro.
     await C((tx) => mudarSituacaoPeriodo(tx, ctr, e.clienteId, { competencia: fev, para: "EM_CONFERENCIA" }));

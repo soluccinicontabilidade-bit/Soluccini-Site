@@ -7,6 +7,9 @@ import { cifrar, indiceCego } from "../src/lib/cripto";
 import { gerarHashSenha, gerarSenhaTemporaria } from "../src/lib/auth/senha";
 import { adicionarVinculo, criarCliente, criarContrato, marcarItemChecklist } from "../src/lib/clientes";
 import { CATEGORIAS_PADRAO } from "../src/lib/documentos";
+import { copiarPlanoParaCliente, garantirModeloPadrao } from "../src/lib/contabil/plano";
+import { aplicarSaldosIniciais, criarLancamento, lerCompetencia } from "../src/lib/contabil/lancamentos";
+import { contasQuePedemJustificativa, mudarSituacaoPeriodo } from "../src/lib/contabil/periodos";
 
 function dv(base: string, pesos: number[]) {
   const soma = pesos.reduce((s, p, i) => s + p * Number(base[i]), 0);
@@ -42,7 +45,7 @@ async function main() {
   // Com o isolamento ativo, só dá para procurar pelo e-mail do administrador de demonstração.
   const existe = await comAutenticacao({ email: "admin@soluccini.local" }, (tx) => tx.usuario.count({ where: { email: "admin@soluccini.local" } }));
   if (existe > 0) {
-    console.log("O escritório de demonstração já existe. Nada a fazer.");
+    await semearContabil();
     return;
   }
 
@@ -115,6 +118,65 @@ async function main() {
   console.log(`  bpo@soluccini.local        senha: ${senhaEquipe}`);
   console.log(`  irpf@soluccini.local       senha: ${senhaEquipe}`);
   console.log("No primeiro acesso, cada pessoa ativa a verificação em duas etapas.");
+  await semearContabil();
+}
+
+// Fase 2: modelo de plano de contas, planos da padaria e da clínica, saldos
+// iniciais e três meses de lançamentos da padaria, com janeiro fechado.
+async function semearContabil() {
+  const usuarios = await comAutenticacao({ email: "admin@soluccini.local" }, (tx) => tx.usuario.findMany({ where: { email: "admin@soluccini.local" } }));
+  const admin = usuarios[0];
+  const escritorioId = admin.escritorioId;
+  const ctxAdmin = { escritorioId, usuarioId: admin.id, perfil: admin.perfil, origem: "seed" };
+  const autor = { id: admin.id, escritorioId, perfil: admin.perfil };
+  const feito = await comEscritorio(ctxAdmin, (tx) => tx.planoDeContas.count({ where: { clienteId: { not: null } } }));
+  if (feito > 0) {
+    console.log("Dados de demonstração já existem. Nada a fazer.");
+    return;
+  }
+  const contador = await comEscritorio(ctxAdmin, (tx) => tx.usuario.findFirstOrThrow({ where: { perfil: "CONTADOR" } }));
+  const padariaId = await comEscritorio(ctxAdmin, async (tx) => {
+    const modelo = await garantirModeloPadrao(tx, escritorioId);
+    const [padaria, clinica] = await Promise.all([
+      tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: { startsWith: "Padaria" } } } }),
+      tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: { startsWith: "Clínica" } } } }),
+    ]);
+    await copiarPlanoParaCliente(tx, autor, padaria.id, modelo.id);
+    await copiarPlanoParaCliente(tx, autor, clinica.id, modelo.id);
+    const saldos = [
+      "conta;debito;credito",
+      "1.1.1.01;1.200,00;", "1.1.1.02;18.500,00;", "1.1.4.01;6.300,00;", "1.2.3.02;24.000,00;", "1.2.3.90;;4.800,00",
+      "2.1.1.01;;7.200,00", "2.1.4.01;;1.850,00", "2.3.1.01;;30.000,00", "2.3.3.01;;6.150,00",
+    ].join("\n");
+    await aplicarSaldosIniciais(tx, autor, padaria.id, "2026-01-01", { nome: "saldos-padaria-2026.csv", conteudo: Buffer.from(saldos) });
+    const L = (data: string, historico: string, partidas: [string, "D" | "C", string][]) =>
+      criarLancamento(tx, autor, padaria.id, { data, historico, partidas: partidas.map(([conta, t, valor]) => ({ conta, tipo: t === "D" ? "DEBITO" : "CREDITO", valor })) });
+    for (const [mes, vendas, cmv, aluguel] of [["01", "42.300,00", "18.900,00", "4.500,00"], ["02", "39.850,00", "17.600,00", "4.500,00"], ["03", "45.120,00", "20.100,00", "4.500,00"]] as const) {
+      await L(`2026-${mes}-05`, `Pagamento do aluguel de ${mes}/2026`, [["5.1.2.01", "D", aluguel], ["1.1.1.02", "C", aluguel]]);
+      await L(`2026-${mes}-10`, `Compras de mercadorias de ${mes}/2026`, [["1.1.4.01", "D", cmv], ["2.1.1.01", "C", cmv]]);
+      await L(`2026-${mes}-20`, `Pagamento a fornecedores`, [["2.1.1.01", "D", "15.000,00"], ["1.1.1.02", "C", "15.000,00"]]);
+      await L(`2026-${mes}-28`, `Vendas do mês ${mes}/2026 (cartão e dinheiro)`, [["1.1.1.02", "D", vendas], ["3.1.1.01", "C", vendas]]);
+      await L(`2026-${mes}-28`, `Custo das mercadorias vendidas em ${mes}/2026`, [["4.1.1.01", "D", cmv], ["1.1.4.01", "C", cmv]]);
+      await L(`2026-${mes}-28`, `Simples Nacional sobre vendas de ${mes}/2026 (valor ilustrativo)`, [["3.2.1.02", "D", "2.400,00"], ["2.1.4.01", "C", "2.400,00"]]);
+      await L(`2026-${mes}-28`, `Tarifas bancárias`, [["5.2.1.01", "D", "89,90"], ["1.1.1.02", "C", "89,90"]]);
+    }
+    return padaria.id;
+  }, { timeout: 120000 });
+
+  // Janeiro: conferido e fechado pela contadora. Fevereiro: em conferência.
+  const ctxContador = { escritorioId, usuarioId: contador.id, perfil: contador.perfil, origem: "seed" };
+  const autorContador = { id: contador.id, escritorioId, perfil: contador.perfil };
+  await comEscritorio(ctxContador, async (tx) => {
+    const jan = lerCompetencia("2026-01");
+    await mudarSituacaoPeriodo(tx, autorContador, padariaId, { competencia: jan, para: "EM_CONFERENCIA" });
+    const pend = await contasQuePedemJustificativa(tx, padariaId, jan);
+    await mudarSituacaoPeriodo(tx, autorContador, padariaId, {
+      competencia: jan, para: "FECHADO",
+      justificativasContas: Object.fromEntries(pend.map((p) => [p.conta.id, "Saldo conferido com o extrato de janeiro"])),
+    });
+    await mudarSituacaoPeriodo(tx, autorContador, padariaId, { competencia: lerCompetencia("2026-02"), para: "EM_CONFERENCIA" });
+  }, { timeout: 60000 });
+  console.log("Contabilidade de demonstração criada: padaria com saldos iniciais e lançamentos de jan a mar/2026 (janeiro fechado).");
 }
 
 main()

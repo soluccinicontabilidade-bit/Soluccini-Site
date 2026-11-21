@@ -342,9 +342,14 @@ export function fluxoDeCaixa(contas: ContaR[], partidas: PartidaR[], de: Date, a
   };
   const saldoCaixa = (ate_: Date, antes = false) =>
     partidas.filter((p) => caixa.has(p.contaId) && (antes ? p.data < ate_ : p.data <= ate_)).reduce((t, p) => t + (p.tipo === "DEBITO" ? p.valor : -p.valor), 0n);
+  // Saldos iniciais não são entrada nem saída de dinheiro: compõem o saldo inicial.
+  const ehAbertura = (p: PartidaR) => p.origem === "SALDO_INICIAL";
+  const aberturaNoPeriodo = partidas
+    .filter((p) => ehAbertura(p) && caixa.has(p.contaId) && p.data >= de && p.data <= ate)
+    .reduce((t, p) => t + (p.tipo === "DEBITO" ? p.valor : -p.valor), 0n);
 
   const lancs = new Map<string, PartidaR[]>();
-  for (const p of partidas) if (p.data >= de && p.data <= ate) lancs.set(p.lancamentoId, [...(lancs.get(p.lancamentoId) ?? []), p]);
+  for (const p of partidas) if (p.data >= de && p.data <= ate && !ehAbertura(p)) lancs.set(p.lancamentoId, [...(lancs.get(p.lancamentoId) ?? []), p]);
   const porCategoria = new Map<string, { conta: ContaR; entradas: bigint; saidas: bigint }>();
   const somar = (contaId: string, efeito: bigint) => {
     const cat = nivel2(porId.get(contaId)!);
@@ -370,7 +375,7 @@ export function fluxoDeCaixa(contas: ContaR[], partidas: PartidaR[], de: Date, a
     }
     for (const c of cotas) somar(c.p.contaId, efeitoCaixa > 0n ? c.inteiro : -c.inteiro);
   }
-  const saldoInicial = saldoCaixa(de, true);
+  const saldoInicial = saldoCaixa(de, true) + aberturaNoPeriodo;
   const saldoFinal = saldoCaixa(ate);
   const cats = [...porCategoria.values()].sort((a, b) => compararCodigos(a.conta.codigo, b.conta.codigo));
   const entradas = cats.reduce((t, c) => t + c.entradas, 0n);
@@ -387,7 +392,7 @@ export function fluxoDeCaixa(contas: ContaR[], partidas: PartidaR[], de: Date, a
     linhas, saldoInicial, saldoFinal, variacao: entradas - saidas,
     alerta: saldoInicial + entradas - saidas === saldoFinal ? undefined : "A variação não bate com os saldos de caixa. Verifique os lançamentos.",
     notas: [
-      "Caixa e equivalentes são as contas marcadas como disponíveis no plano de contas.",
+      "Caixa e equivalentes são as contas marcadas como disponíveis no plano de contas. Saldos iniciais entram no saldo inicial, não como movimento.",
       "Agrupado pela conta de contrapartida (nível 2). A classificação em atividades operacionais, de investimento e de financiamento depende de revisão do contador.",
     ],
   };
