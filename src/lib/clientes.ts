@@ -5,7 +5,8 @@ import { cifrar, decifrarTexto, indiceCego } from "@/lib/cripto";
 import { cnpjValido, cpfValido, dataCivil, formatarBp, lerData, percentualParaBp, reaisParaCentavos, somenteDigitos, UFS } from "@/lib/br";
 import { filtroClientes } from "@/lib/auth/permissoes";
 
-export class ErroDeNegocio extends Error {}
+import { ErroDeNegocio } from "@/lib/erros";
+export { ErroDeNegocio };
 
 export const NOME_REGIME: Record<RegimeTributario, string> = {
   MEI: "MEI",

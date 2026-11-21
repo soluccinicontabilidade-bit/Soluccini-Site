@@ -1,5 +1,3 @@
-import Papa from "papaparse";
-import readXlsxFile from "read-excel-file/node";
 import { randomUUID } from "node:crypto";
 import type { PerfilUsuario, Prisma } from "@prisma/client";
 import type { Tx } from "@/lib/db";
@@ -8,7 +6,8 @@ import { gravarArquivo, lerArquivo } from "@/lib/armazenamento";
 import { cnpjValido, cpfValido, isoData, hojeSaoPaulo, lerData, somenteDigitos } from "@/lib/br";
 import { criarCliente, ErroDeNegocio, hashDocumento, validarPessoa, type DadosPessoa } from "@/lib/clientes";
 
-export const LIMITE_LINHAS = 2000;
+import { lerTabela, normalizarCabecalho } from "@/lib/planilha";
+export { LIMITE_LINHAS } from "@/lib/planilha";
 
 // Nomes de coluna aceitos (sem acento, minúsculas, espaços viram _).
 const APELIDOS: Record<string, string> = {
@@ -35,47 +34,10 @@ export const COLUNAS_MODELO = [
   "cep", "logradouro", "numero", "complemento", "bairro", "municipio", "uf", "inicio_servico",
 ];
 
-const normalizarCabecalho = (s: string) =>
-  s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/[\s.]+/g, "_");
-
-function celula(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  if (v instanceof Date) return isoData(v);
-  return String(v).trim();
-}
-
-/** Lê CSV (separado por ; ou ,) ou XLSX e devolve linhas com chaves já traduzidas. */
-export async function lerPlanilha(nome: string, conteudo: Buffer): Promise<{ linhas: Record<string, string>[]; colunasIgnoradas: string[] }> {
-  const ext = nome.toLowerCase().split(".").pop();
-  let matriz: unknown[][];
-  if (ext === "csv" || ext === "txt") {
-    let texto = conteudo.toString("utf8");
-    if (texto.includes("�")) texto = conteudo.toString("latin1"); // planilhas salvas pelo Excel em ANSI
-    const r = Papa.parse<string[]>(texto.replace(/^﻿/, ""), { skipEmptyLines: "greedy", delimitersToGuess: [";", ",", "\t"] });
-    matriz = r.data;
-  } else if (ext === "xlsx") {
-    const r = await readXlsxFile(conteudo);
-    matriz = (Array.isArray(r[0]?.data) ? (r[0] as { data: unknown[][] }).data : r) as unknown[][];
-  } else {
-    throw new ErroDeNegocio("Envie a planilha em XLSX ou CSV.");
-  }
-  if (matriz.length < 2) throw new ErroDeNegocio("A planilha não tem linhas de dados abaixo do cabeçalho.");
-  if (matriz.length - 1 > LIMITE_LINHAS) throw new ErroDeNegocio(`A planilha passa de ${LIMITE_LINHAS} linhas. Divida em arquivos menores.`);
-
-  const cabecalho = matriz[0].map((c) => normalizarCabecalho(celula(c)));
-  const campos = cabecalho.map((c) => APELIDOS[c]);
-  if (!campos.includes("documento") || !campos.includes("nome")) {
-    throw new ErroDeNegocio("A primeira linha precisa ter pelo menos as colunas cpf_cnpj e nome. Baixe o modelo para ver o formato.");
-  }
-  const colunasIgnoradas = cabecalho.filter((c, i) => c && !campos[i]);
-  const linhas = matriz.slice(1).map((linha) => {
-    const reg: Record<string, string> = {};
-    campos.forEach((campo, i) => {
-      if (campo) reg[campo] = celula(linha[i]);
-    });
-    return reg;
-  });
-  return { linhas, colunasIgnoradas };
+/** Lê a planilha de clientes (CSV ou XLSX). */
+export function lerPlanilha(nome: string, conteudo: Buffer) {
+  return lerTabela(nome, conteudo, APELIDOS, ["documento", "nome"],
+    "A primeira linha precisa ter pelo menos as colunas cpf_cnpj e nome. Baixe o modelo para ver o formato.");
 }
 
 function lerRegime(v: string): string | undefined {

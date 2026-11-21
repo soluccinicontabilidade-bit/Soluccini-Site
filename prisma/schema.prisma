@@ -582,6 +582,10 @@ model ContaContabil {
   // Código da conta no plano referencial da RFB (para SPED futuro). Texto
   // livre aqui; a tabela referencial oficial será carregada, não inventada.
   codigoReferencial String?       @map("codigo_referencial")
+  // Caixa e equivalentes (caixa, bancos, aplicações de liquidez imediata).
+  // Usado no fluxo de caixa e, até a fase 4, no fechamento: cada conta
+  // disponível com saldo ou movimento precisa de justificativa para fechar.
+  disponivel        Boolean       @default(false)
   ativa             Boolean       @default(true)
   criadoEm          DateTime      @default(now()) @map("criado_em") @db.Timestamptz(3)
 
