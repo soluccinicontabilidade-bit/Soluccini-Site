@@ -1,0 +1,758 @@
+// =============================================================================
+// Partida Dobrada: esquema do banco, fases 1 (base) e 2 (contabilidade)
+// =============================================================================
+// Convenções
+// - Toda tabela de dados tem escritorio_id. O isolamento entre escritórios é
+//   garantido no PostgreSQL por Row Level Security (ver prisma/sql/), não só
+//   pelo código da aplicação.
+// - Dinheiro: BigInt em centavos. Nunca Float/Decimal com arredondamento implícito.
+// - Datas contábeis (competência, data do lançamento): @db.Date, sem hora.
+//   Instantes (criado_em, etc.): timestamptz. Fuso da aplicação: America/Sao_Paulo.
+// - Exclusão lógica (excluido_em) em tudo que é financeiro ou contábil.
+// - CPF/CNPJ e dados sensíveis: cifrados na aplicação (AES-256-GCM, chave no
+//   KMS). Para busca e unicidade, guardamos um hash HMAC (índice cego) e os
+//   últimos dígitos para exibir mascarado.
+// - Regras que o Prisma não expressa (partidas fecham, período fechado não
+//   muda, auditoria imutável, RLS) ficam em prisma/sql/*.sql e entram na
+//   primeira migração.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 1: escritório, usuários, acesso
+// -----------------------------------------------------------------------------
+
+model Escritorio {
+  id             String   @id @default(uuid()) @db.Uuid
+  nome           String
+  cnpjCifrado    Bytes    @map("cnpj_cifrado")
+  cnpjHash       String   @unique @map("cnpj_hash")
+  cnpjFinal      String   @map("cnpj_final") @db.VarChar(4)
+  crcResponsavel String?  @map("crc_responsavel")
+  fusoHorario    String   @default("America/Sao_Paulo") @map("fuso_horario")
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm   DateTime @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  usuarios            Usuario[]
+  carteiras           Carteira[]
+  pessoas             Pessoa[]
+  clientes            Cliente[]
+  etiquetas           Etiqueta[]
+  categoriasDocumento CategoriaDocumento[]
+  planosDeContas      PlanoDeContas[]
+
+  @@map("escritorio")
+}
+
+enum PerfilUsuario {
+  ADMINISTRADOR
+  CONTADOR
+  ANALISTA_BPO
+  ANALISTA_IRPF
+  CLIENTE_LEITOR
+  CLIENTE_APROVADOR
+}
+
+model Usuario {
+  id                 String        @id @default(uuid()) @db.Uuid
+  escritorioId       String        @map("escritorio_id") @db.Uuid
+  nome               String
+  email              String        @db.Citext
+  senhaHash          String        @map("senha_hash") // argon2id
+  perfil             PerfilUsuario
+  ativo              Boolean       @default(true)
+  // 2FA (TOTP). O segredo é cifrado na aplicação.
+  totpSegredoCifrado Bytes?        @map("totp_segredo_cifrado")
+  totpAtivadoEm      DateTime?     @map("totp_ativado_em") @db.Timestamptz(3)
+  tentativasFalhas   Int           @default(0) @map("tentativas_falhas")
+  bloqueadoAte       DateTime?     @map("bloqueado_ate") @db.Timestamptz(3)
+  ultimoAcessoEm     DateTime?     @map("ultimo_acesso_em") @db.Timestamptz(3)
+  criadoEm           DateTime      @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm       DateTime      @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  escritorio           Escritorio          @relation(fields: [escritorioId], references: [id])
+  sessoes              Sessao[]
+  codigosRecuperacao   CodigoRecuperacao[]
+  carteirasResponsavel Carteira[]          @relation("CarteiraResponsavel")
+  acessosCliente       AcessoCliente[]
+
+  @@unique([escritorioId, email])
+  @@index([escritorioId, perfil])
+  @@map("usuario")
+}
+
+model Sessao {
+  id            String    @id @default(uuid()) @db.Uuid
+  escritorioId  String    @map("escritorio_id") @db.Uuid
+  usuarioId     String    @map("usuario_id") @db.Uuid
+  tokenHash     String    @unique @map("token_hash") // só o hash do token fica no banco
+  ip            String?   @db.Inet
+  userAgent     String?   @map("user_agent")
+  doisFatoresOk Boolean   @default(false) @map("dois_fatores_ok")
+  expiraEm      DateTime  @map("expira_em") @db.Timestamptz(3)
+  revogadaEm    DateTime? @map("revogada_em") @db.Timestamptz(3)
+  criadaEm      DateTime  @default(now()) @map("criada_em") @db.Timestamptz(3)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([expiraEm])
+  @@map("sessao")
+}
+
+model CodigoRecuperacao {
+  id           String    @id @default(uuid()) @db.Uuid
+  escritorioId String    @map("escritorio_id") @db.Uuid
+  usuarioId    String    @map("usuario_id") @db.Uuid
+  codigoHash   String    @map("codigo_hash")
+  usadoEm      DateTime? @map("usado_em") @db.Timestamptz(3)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("codigo_recuperacao")
+}
+
+// Carteira: grupo de clientes sob um analista. Um cliente pode estar em mais
+// de uma carteira (ex.: uma de BPO e outra de IRPF).
+model Carteira {
+  id            String   @id @default(uuid()) @db.Uuid
+  escritorioId  String   @map("escritorio_id") @db.Uuid
+  nome          String
+  responsavelId String   @map("responsavel_id") @db.Uuid
+  criadoEm      DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  escritorio  Escritorio        @relation(fields: [escritorioId], references: [id])
+  responsavel Usuario           @relation("CarteiraResponsavel", fields: [responsavelId], references: [id])
+  clientes    CarteiraCliente[]
+
+  @@unique([escritorioId, nome])
+  @@index([responsavelId])
+  @@map("carteira")
+}
+
+model CarteiraCliente {
+  carteiraId   String @map("carteira_id") @db.Uuid
+  clienteId    String @map("cliente_id") @db.Uuid
+  escritorioId String @map("escritorio_id") @db.Uuid
+
+  carteira Carteira @relation(fields: [carteiraId], references: [id], onDelete: Cascade)
+  cliente  Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@id([carteiraId, clienteId])
+  @@index([clienteId])
+  @@map("carteira_cliente")
+}
+
+// Usuário com perfil CLIENTE_* enxerga apenas os clientes listados aqui.
+model AcessoCliente {
+  usuarioId    String @map("usuario_id") @db.Uuid
+  clienteId    String @map("cliente_id") @db.Uuid
+  escritorioId String @map("escritorio_id") @db.Uuid
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, clienteId])
+  @@index([clienteId])
+  @@map("acesso_cliente")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 1: pessoas, clientes, vínculos
+// -----------------------------------------------------------------------------
+
+enum TipoPessoa {
+  PF
+  PJ
+}
+
+enum RegimeTributario {
+  MEI
+  SIMPLES_NACIONAL
+  LUCRO_PRESUMIDO
+  LUCRO_REAL
+}
+
+// Pessoa é qualquer PF ou PJ que o escritório conhece. Pode ou não ser
+// cliente: um sócio PF de um cliente PJ é Pessoa e contribuinte de IRPF,
+// mesmo que não tenha contrato próprio.
+model Pessoa {
+  id                 String            @id @default(uuid()) @db.Uuid
+  escritorioId       String            @map("escritorio_id") @db.Uuid
+  tipo               TipoPessoa
+  documentoCifrado   Bytes             @map("documento_cifrado") // CPF ou CNPJ
+  documentoHash      String            @map("documento_hash") // HMAC do documento normalizado
+  documentoFinal     String            @map("documento_final") @db.VarChar(4)
+  nome               String // nome civil ou razão social
+  nomeFantasia       String?           @map("nome_fantasia")
+  dataNascimento     DateTime?         @map("data_nascimento") @db.Date // PF
+  dataAbertura       DateTime?         @map("data_abertura") @db.Date // PJ
+  regimeTributario   RegimeTributario? @map("regime_tributario") // PJ
+  cnaePrincipal      String?           @map("cnae_principal") @db.VarChar(9)
+  cnaesSecundarios   String[]          @map("cnaes_secundarios")
+  inscricaoEstadual  String?           @map("inscricao_estadual")
+  inscricaoMunicipal String?           @map("inscricao_municipal")
+  email              String?           @db.Citext
+  telefone           String?
+  // Endereço
+  cep                String?           @db.VarChar(8)
+  logradouro         String?
+  numero             String?
+  complemento        String?
+  bairro             String?
+  municipio          String?
+  uf                 String?           @db.Char(2)
+  codigoIbge         String?           @map("codigo_ibge") @db.VarChar(7)
+  criadoEm           DateTime          @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm       DateTime          @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+  excluidoEm         DateTime?         @map("excluido_em") @db.Timestamptz(3)
+
+  escritorio          Escritorio          @relation(fields: [escritorioId], references: [id])
+  cliente             Cliente?
+  contatos            Contato[]
+  vinculosComoEmpresa VinculoSocietario[] @relation("VinculoEmpresa")
+  vinculosComoSocio   VinculoSocietario[] @relation("VinculoSocio")
+
+  @@unique([escritorioId, documentoHash])
+  @@index([escritorioId, tipo])
+  @@index([escritorioId, nome])
+  @@map("pessoa")
+}
+
+model Contato {
+  id           String  @id @default(uuid()) @db.Uuid
+  escritorioId String  @map("escritorio_id") @db.Uuid
+  pessoaId     String  @map("pessoa_id") @db.Uuid
+  nome         String
+  funcao       String?
+  email        String? @db.Citext
+  telefone     String?
+  principal    Boolean @default(false)
+
+  pessoa Pessoa @relation(fields: [pessoaId], references: [id], onDelete: Cascade)
+
+  @@index([pessoaId])
+  @@map("contato")
+}
+
+enum TipoVinculo {
+  SOCIO
+  SOCIO_ADMINISTRADOR
+  ADMINISTRADOR
+  TITULAR // empresário individual / MEI
+}
+
+// Liga uma PJ às PF (ou PJ) que a compõem. Base para importar pró-labore e
+// lucros no IRPF do sócio (fase 5).
+model VinculoSocietario {
+  id             String      @id @default(uuid()) @db.Uuid
+  escritorioId   String      @map("escritorio_id") @db.Uuid
+  empresaId      String      @map("empresa_id") @db.Uuid
+  socioId        String      @map("socio_id") @db.Uuid
+  tipo           TipoVinculo
+  // Participação em pontos-base: 10000 = 100,00%
+  participacaoBp Int         @map("participacao_bp")
+  inicio         DateTime    @db.Date
+  fim            DateTime?   @db.Date
+  criadoEm       DateTime    @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  empresa Pessoa @relation("VinculoEmpresa", fields: [empresaId], references: [id])
+  socio   Pessoa @relation("VinculoSocio", fields: [socioId], references: [id])
+
+  @@index([empresaId])
+  @@index([socioId])
+  @@map("vinculo_societario")
+}
+
+enum SituacaoCliente {
+  EM_ENTRADA // checklist de entrada aberto
+  ATIVO
+  SUSPENSO
+  ENCERRADO
+}
+
+enum RegimeContabil {
+  COMPETENCIA
+  CAIXA
+}
+
+// Cliente é a relação de serviço entre o escritório e uma Pessoa.
+model Cliente {
+  id             String          @id @default(uuid()) @db.Uuid
+  escritorioId   String          @map("escritorio_id") @db.Uuid
+  pessoaId       String          @unique @map("pessoa_id") @db.Uuid
+  codigo         Int             @default(0) // atribuído por trigger: sequencial por escritório
+  situacao       SituacaoCliente @default(EM_ENTRADA)
+  regimeContabil RegimeContabil  @default(COMPETENCIA) @map("regime_contabil")
+  inicioServico  DateTime        @map("inicio_servico") @db.Date
+  fimServico     DateTime?       @map("fim_servico") @db.Date
+  observacoes    String?
+  criadoEm       DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm   DateTime        @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+  excluidoEm     DateTime?       @map("excluido_em") @db.Timestamptz(3)
+
+  escritorio       Escritorio             @relation(fields: [escritorioId], references: [id])
+  pessoa           Pessoa                 @relation(fields: [pessoaId], references: [id])
+  carteiras        CarteiraCliente[]
+  acessos          AcessoCliente[]
+  etiquetas        ClienteEtiqueta[]
+  contratos        Contrato[]
+  documentos       Documento[]
+  checklistEntrada ItemChecklistEntrada[]
+  eventos          EventoCliente[]
+  planoDeContas    PlanoDeContas?
+  periodos         PeriodoContabil[]
+  lancamentos      LancamentoContabil[]
+  importacoes      Importacao[]
+
+  @@unique([escritorioId, codigo])
+  @@index([escritorioId, situacao])
+  @@map("cliente")
+}
+
+model Etiqueta {
+  id           String @id @default(uuid()) @db.Uuid
+  escritorioId String @map("escritorio_id") @db.Uuid
+  nome         String
+  cor          String @db.VarChar(7)
+
+  escritorio Escritorio        @relation(fields: [escritorioId], references: [id])
+  clientes   ClienteEtiqueta[]
+
+  @@unique([escritorioId, nome])
+  @@map("etiqueta")
+}
+
+model ClienteEtiqueta {
+  clienteId    String @map("cliente_id") @db.Uuid
+  etiquetaId   String @map("etiqueta_id") @db.Uuid
+  escritorioId String @map("escritorio_id") @db.Uuid
+
+  cliente  Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  etiqueta Etiqueta @relation(fields: [etiquetaId], references: [id], onDelete: Cascade)
+
+  @@id([clienteId, etiquetaId])
+  @@index([etiquetaId])
+  @@map("cliente_etiqueta")
+}
+
+model ItemChecklistEntrada {
+  id             String    @id @default(uuid()) @db.Uuid
+  escritorioId   String    @map("escritorio_id") @db.Uuid
+  clienteId      String    @map("cliente_id") @db.Uuid
+  ordem          Int
+  descricao      String
+  concluidoEm    DateTime? @map("concluido_em") @db.Timestamptz(3)
+  concluidoPorId String?   @map("concluido_por_id") @db.Uuid
+  observacao     String?
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@index([clienteId, ordem])
+  @@map("item_checklist_entrada")
+}
+
+// Linha do tempo legível do cliente. A auditoria técnica completa fica em
+// RegistroAuditoria; aqui ficam os fatos que a equipe quer ver.
+model EventoCliente {
+  id           String   @id @default(uuid()) @db.Uuid
+  escritorioId String   @map("escritorio_id") @db.Uuid
+  clienteId    String   @map("cliente_id") @db.Uuid
+  tipo         String // ex.: "documento.enviado", "periodo.fechado"
+  resumo       String
+  dados        Json?
+  usuarioId    String?  @map("usuario_id") @db.Uuid
+  ocorridoEm   DateTime @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+
+  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  @@index([clienteId, ocorridoEm(sort: Desc)])
+  @@map("evento_cliente")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 1: contrato e honorários
+// -----------------------------------------------------------------------------
+
+enum ServicoContratado {
+  CONTABIL
+  BPO_FINANCEIRO
+  IRPF
+}
+
+model Contrato {
+  id            String              @id @default(uuid()) @db.Uuid
+  escritorioId  String              @map("escritorio_id") @db.Uuid
+  clienteId     String              @map("cliente_id") @db.Uuid
+  servicos      ServicoContratado[]
+  inicio        DateTime            @db.Date
+  fim           DateTime?           @db.Date
+  diaVencimento Int                 @map("dia_vencimento") // 1 a 28
+  observacoes   String?
+  criadoEm      DateTime            @default(now()) @map("criado_em") @db.Timestamptz(3)
+  excluidoEm    DateTime?           @map("excluido_em") @db.Timestamptz(3)
+
+  cliente Cliente          @relation(fields: [clienteId], references: [id])
+  valores ValorHonorario[]
+
+  @@index([clienteId])
+  @@map("contrato")
+}
+
+// Histórico de valores do contrato. O valor vigente é o de maior vigencia_inicio
+// que seja <= hoje. Reajuste = nova linha, nunca update.
+model ValorHonorario {
+  id             String   @id @default(uuid()) @db.Uuid
+  escritorioId   String   @map("escritorio_id") @db.Uuid
+  contratoId     String   @map("contrato_id") @db.Uuid
+  valorCentavos  BigInt   @map("valor_centavos")
+  vigenciaInicio DateTime @map("vigencia_inicio") @db.Date
+  motivo         String // "valor inicial", "reajuste IPCA 2026", ...
+  criadoPorId    String   @map("criado_por_id") @db.Uuid
+  criadoEm       DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  contrato Contrato @relation(fields: [contratoId], references: [id])
+
+  @@unique([contratoId, vigenciaInicio])
+  @@map("valor_honorario")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 1: documentos
+// -----------------------------------------------------------------------------
+
+model CategoriaDocumento {
+  id             String  @id @default(uuid()) @db.Uuid
+  escritorioId   String  @map("escritorio_id") @db.Uuid
+  nome           String // "Contrato social", "Certidão negativa federal", ...
+  temValidade    Boolean @default(false) @map("tem_validade")
+  avisoDiasAntes Int?    @map("aviso_dias_antes")
+
+  escritorio Escritorio  @relation(fields: [escritorioId], references: [id])
+  documentos Documento[]
+
+  @@unique([escritorioId, nome])
+  @@map("categoria_documento")
+}
+
+// Documento é o "item" (ex.: Certidão federal 03/2026); cada envio é uma versão.
+model Documento {
+  id           String    @id @default(uuid()) @db.Uuid
+  escritorioId String    @map("escritorio_id") @db.Uuid
+  clienteId    String    @map("cliente_id") @db.Uuid
+  categoriaId  String    @map("categoria_id") @db.Uuid
+  titulo       String
+  competencia  DateTime? @db.Date // sempre o dia 1 do mês
+  validoAte    DateTime? @map("valido_ate") @db.Date
+  criadoEm     DateTime  @default(now()) @map("criado_em") @db.Timestamptz(3)
+  excluidoEm   DateTime? @map("excluido_em") @db.Timestamptz(3)
+
+  cliente   Cliente            @relation(fields: [clienteId], references: [id])
+  categoria CategoriaDocumento @relation(fields: [categoriaId], references: [id])
+  versoes   VersaoDocumento[]
+
+  @@index([clienteId, competencia])
+  @@index([escritorioId, validoAte])
+  @@map("documento")
+}
+
+model VersaoDocumento {
+  id           String   @id @default(uuid()) @db.Uuid
+  escritorioId String   @map("escritorio_id") @db.Uuid
+  documentoId  String   @map("documento_id") @db.Uuid
+  versao       Int
+  chaveArquivo String   @map("chave_arquivo") // chave no armazenamento S3 (cifrado no servidor)
+  nomeOriginal String   @map("nome_original")
+  tipoMime     String   @map("tipo_mime")
+  tamanhoBytes BigInt   @map("tamanho_bytes")
+  sha256       String   @db.Char(64)
+  enviadoPorId String   @map("enviado_por_id") @db.Uuid
+  enviadoEm    DateTime @default(now()) @map("enviado_em") @db.Timestamptz(3)
+
+  documento Documento @relation(fields: [documentoId], references: [id])
+
+  @@unique([documentoId, versao])
+  @@index([escritorioId, sha256])
+  @@map("versao_documento")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 1/2: importação de planilhas (clientes, plano de contas, saldos iniciais)
+// -----------------------------------------------------------------------------
+
+enum TipoImportacao {
+  CLIENTES
+  PLANO_DE_CONTAS
+  SALDOS_INICIAIS
+}
+
+enum SituacaoImportacao {
+  RECEBIDA
+  VALIDANDO
+  COM_ERROS // aguardando correção; nada foi gravado
+  PRONTA // validada, aguardando confirmação do usuário
+  APLICADA
+  CANCELADA
+}
+
+// Fluxo em duas etapas: valida tudo e mostra o que vai acontecer; só grava
+// depois de confirmado. O sha256 do arquivo impede aplicar o mesmo arquivo
+// duas vezes para o mesmo destino.
+model Importacao {
+  id           String             @id @default(uuid()) @db.Uuid
+  escritorioId String             @map("escritorio_id") @db.Uuid
+  clienteId    String?            @map("cliente_id") @db.Uuid // nulo para CLIENTES
+  tipo         TipoImportacao
+  situacao     SituacaoImportacao @default(RECEBIDA)
+  chaveArquivo String             @map("chave_arquivo")
+  nomeOriginal String             @map("nome_original")
+  sha256       String             @db.Char(64)
+  mapeamento   Json? // coluna da planilha -> campo
+  resumo       Json? // contagens: criar, atualizar, ignorar
+  erros        Json? // [{linha, coluna, mensagem}]
+  criadoPorId  String             @map("criado_por_id") @db.Uuid
+  criadoEm     DateTime           @default(now()) @map("criado_em") @db.Timestamptz(3)
+  aplicadaEm   DateTime?          @map("aplicada_em") @db.Timestamptz(3)
+
+  cliente Cliente? @relation(fields: [clienteId], references: [id])
+
+  @@index([escritorioId, tipo, sha256])
+  @@map("importacao")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 2: plano de contas
+// -----------------------------------------------------------------------------
+
+// Um plano é um MODELO do escritório (cliente_id nulo) ou o plano de um
+// cliente (copiado de um modelo e depois ajustado).
+model PlanoDeContas {
+  id           String   @id @default(uuid()) @db.Uuid
+  escritorioId String   @map("escritorio_id") @db.Uuid
+  clienteId    String?  @unique @map("cliente_id") @db.Uuid
+  nome         String
+  copiadoDeId  String?  @map("copiado_de_id") @db.Uuid
+  criadoEm     DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  escritorio Escritorio      @relation(fields: [escritorioId], references: [id])
+  cliente    Cliente?        @relation(fields: [clienteId], references: [id])
+  copiadoDe  PlanoDeContas?  @relation("CopiaPlano", fields: [copiadoDeId], references: [id])
+  copias     PlanoDeContas[] @relation("CopiaPlano")
+  contas     ContaContabil[]
+
+  @@map("plano_de_contas")
+}
+
+enum GrupoConta {
+  ATIVO
+  PASSIVO
+  PATRIMONIO_LIQUIDO
+  RECEITA
+  CUSTO
+  DESPESA
+  APURACAO // contas de resultado do exercício / encerramento
+}
+
+enum NaturezaConta {
+  DEVEDORA
+  CREDORA
+}
+
+model ContaContabil {
+  id                String        @id @default(uuid()) @db.Uuid
+  escritorioId      String        @map("escritorio_id") @db.Uuid
+  planoId           String        @map("plano_id") @db.Uuid
+  paiId             String?       @map("pai_id") @db.Uuid
+  codigo            String // classificação, ex.: "1.1.01.001"
+  nome              String
+  grupo             GrupoConta
+  natureza          NaturezaConta
+  nivel             Int
+  analitica         Boolean // só contas analíticas recebem partidas
+  // Código da conta no plano referencial da RFB (para SPED futuro). Texto
+  // livre aqui; a tabela referencial oficial será carregada, não inventada.
+  codigoReferencial String?       @map("codigo_referencial")
+  ativa             Boolean       @default(true)
+  criadoEm          DateTime      @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  plano    PlanoDeContas   @relation(fields: [planoId], references: [id])
+  pai      ContaContabil?  @relation("HierarquiaConta", fields: [paiId], references: [id])
+  filhas   ContaContabil[] @relation("HierarquiaConta")
+  partidas Partida[]
+
+  @@unique([planoId, codigo])
+  @@index([paiId])
+  @@map("conta_contabil")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 2: períodos e fechamento
+// -----------------------------------------------------------------------------
+
+enum SituacaoPeriodo {
+  ABERTO
+  EM_CONFERENCIA
+  FECHADO
+}
+
+model PeriodoContabil {
+  id           String          @id @default(uuid()) @db.Uuid
+  escritorioId String          @map("escritorio_id") @db.Uuid
+  clienteId    String          @map("cliente_id") @db.Uuid
+  competencia  DateTime        @db.Date // dia 1 do mês
+  situacao     SituacaoPeriodo @default(ABERTO)
+  fechadoEm    DateTime?       @map("fechado_em") @db.Timestamptz(3)
+  fechadoPorId String?         @map("fechado_por_id") @db.Uuid
+  atualizadoEm DateTime        @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  cliente        Cliente                   @relation(fields: [clienteId], references: [id])
+  lancamentos    LancamentoContabil[]
+  transicoes     TransicaoPeriodo[]
+  justificativas JustificativaFechamento[]
+
+  @@unique([clienteId, competencia])
+  @@index([escritorioId, situacao])
+  @@map("periodo_contabil")
+}
+
+// Toda mudança de situação do período, inclusive reaberturas (que exigem
+// perfil CONTADOR e justificativa; verificado na aplicação e em trigger).
+model TransicaoPeriodo {
+  id            String          @id @default(uuid()) @db.Uuid
+  escritorioId  String          @map("escritorio_id") @db.Uuid
+  periodoId     String          @map("periodo_id") @db.Uuid
+  de            SituacaoPeriodo
+  para          SituacaoPeriodo
+  justificativa String?
+  usuarioId     String          @map("usuario_id") @db.Uuid
+  ocorridaEm    DateTime        @default(now()) @map("ocorrida_em") @db.Timestamptz(3)
+
+  periodo PeriodoContabil @relation(fields: [periodoId], references: [id])
+
+  @@index([periodoId, ocorridaEm])
+  @@map("transicao_periodo")
+}
+
+// Até a fase 4, o fechamento aceita conta bancária "justificada" no lugar de
+// "conciliada". Na fase 3, conta_bancaria_id ganha FK para ContaBancaria.
+model JustificativaFechamento {
+  id              String   @id @default(uuid()) @db.Uuid
+  escritorioId    String   @map("escritorio_id") @db.Uuid
+  periodoId       String   @map("periodo_id") @db.Uuid
+  contaBancariaId String?  @map("conta_bancaria_id") @db.Uuid
+  descricaoConta  String   @map("descricao_conta") // ex.: "Itaú ag 1234 cc 5678-9"
+  texto           String
+  usuarioId       String   @map("usuario_id") @db.Uuid
+  criadaEm        DateTime @default(now()) @map("criada_em") @db.Timestamptz(3)
+
+  periodo PeriodoContabil @relation(fields: [periodoId], references: [id])
+
+  @@index([periodoId])
+  @@map("justificativa_fechamento")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 2: lançamentos e partidas
+// -----------------------------------------------------------------------------
+
+enum OrigemLancamento {
+  MANUAL
+  AJUSTE
+  PROVISAO
+  SALDO_INICIAL
+  IMPORTACAO
+  FINANCEIRO // gerado pelo módulo BPO (fase 3/4)
+  ENCERRAMENTO // apuração do resultado
+  ESTORNO
+}
+
+// Lançamento nunca é editado depois de criado em período fechado; correção
+// é feita por ESTORNO (novo lançamento com partidas invertidas).
+model LancamentoContabil {
+  id            String           @id @default(uuid()) @db.Uuid
+  escritorioId  String           @map("escritorio_id") @db.Uuid
+  clienteId     String           @map("cliente_id") @db.Uuid
+  periodoId     String           @map("periodo_id") @db.Uuid
+  numero        Int              @default(0) // atribuído por trigger: sequencial por cliente, sem buracos
+  data          DateTime         @db.Date
+  historico     String
+  origem        OrigemLancamento
+  justificativa String? // obrigatória para AJUSTE, PROVISAO e ESTORNO
+  importacaoId  String?          @map("importacao_id") @db.Uuid
+  estornaId     String?          @unique @map("estorna_id") @db.Uuid
+  // Chave de idempotência para lançamentos gerados automaticamente
+  // (ex.: "financeiro:<id>:baixa"). Repetir a rotina não duplica.
+  chaveOrigem   String?          @map("chave_origem")
+  criadoPorId   String           @map("criado_por_id") @db.Uuid
+  criadoEm      DateTime         @default(now()) @map("criado_em") @db.Timestamptz(3)
+  excluidoEm    DateTime?        @map("excluido_em") @db.Timestamptz(3)
+
+  cliente      Cliente             @relation(fields: [clienteId], references: [id])
+  periodo      PeriodoContabil     @relation(fields: [periodoId], references: [id])
+  estorna      LancamentoContabil? @relation("Estorno", fields: [estornaId], references: [id])
+  estornadoPor LancamentoContabil? @relation("Estorno")
+  partidas     Partida[]
+
+  @@unique([clienteId, numero])
+  @@unique([clienteId, chaveOrigem])
+  @@index([clienteId, data])
+  @@index([periodoId])
+  @@map("lancamento_contabil")
+}
+
+enum TipoPartida {
+  DEBITO
+  CREDITO
+}
+
+model Partida {
+  id                    String      @id @default(uuid()) @db.Uuid
+  escritorioId          String      @map("escritorio_id") @db.Uuid
+  lancamentoId          String      @map("lancamento_id") @db.Uuid
+  contaId               String      @map("conta_id") @db.Uuid
+  tipo                  TipoPartida
+  valorCentavos         BigInt      @map("valor_centavos") // sempre > 0 (CHECK no SQL)
+  historicoComplementar String?     @map("historico_complementar")
+  ordem                 Int
+
+  lancamento LancamentoContabil @relation(fields: [lancamentoId], references: [id], onDelete: Cascade)
+  conta      ContaContabil      @relation(fields: [contaId], references: [id])
+
+  @@index([lancamentoId])
+  @@index([contaId])
+  @@map("partida")
+}
+
+// -----------------------------------------------------------------------------
+// TRANSVERSAL: auditoria
+// -----------------------------------------------------------------------------
+
+// Somente INSERT. UPDATE e DELETE são bloqueados por trigger e por GRANT.
+// Preenchida por trigger genérico nas tabelas sensíveis, com o usuário e o IP
+// lidos de variáveis de sessão (SET LOCAL app.usuario_id / app.ip).
+model RegistroAuditoria {
+  id           BigInt   @id @default(autoincrement())
+  escritorioId String   @map("escritorio_id") @db.Uuid
+  tabela       String
+  registroId   String   @map("registro_id")
+  operacao     String   @db.VarChar(6) // INSERT, UPDATE, DELETE
+  antes        Json?
+  depois       Json?
+  usuarioId    String?  @map("usuario_id") @db.Uuid
+  ip           String?  @db.Inet
+  origem       String? // "web", "fila:importacao", "seed", ...
+  ocorridoEm   DateTime @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+
+  @@index([escritorioId, tabela, registroId])
+  @@index([escritorioId, ocorridoEm(sort: Desc)])
+  @@map("registro_auditoria")
+}
