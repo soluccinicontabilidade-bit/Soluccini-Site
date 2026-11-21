@@ -179,37 +179,45 @@ CREATE CONSTRAINT TRIGGER partida_fecha_no_commit
   FOR EACH ROW EXECUTE FUNCTION trg_lancamento_fecha();
 
 -- -----------------------------------------------------------------------------
--- 5. Período fechado não aceita alteração
+-- 5. Período em conferência ou fechado não aceita alteração
 -- -----------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION periodo_situacao(p_periodo uuid) RETURNS "SituacaoPeriodo"
 LANGUAGE sql STABLE AS $$ SELECT situacao FROM periodo_contabil WHERE id = p_periodo $$;
+
+-- Período EM_CONFERENCIA ou FECHADO não aceita incluir, alterar ou excluir
+-- lançamentos e partidas. Para corrigir algo em conferência, o período volta
+-- para ABERTO (com registro em transicao_periodo).
+CREATE OR REPLACE FUNCTION periodo_travado(p_periodo uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT periodo_situacao(p_periodo) IN ('EM_CONFERENCIA','FECHADO')
+$$;
 
 CREATE OR REPLACE FUNCTION trg_bloqueio_periodo_fechado() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE pid uuid;
 BEGIN
   IF TG_TABLE_NAME = 'lancamento_contabil' THEN
-    IF TG_OP <> 'INSERT' AND periodo_situacao(OLD.periodo_id) = 'FECHADO' THEN
-      RAISE EXCEPTION 'Período fechado: o lançamento % não pode ser alterado', OLD.numero
+    IF TG_OP <> 'INSERT' AND periodo_travado(OLD.periodo_id) THEN
+      RAISE EXCEPTION 'Período em conferência ou fechado: o lançamento % não pode ser alterado', OLD.numero
         USING ERRCODE = 'check_violation';
     END IF;
-    IF TG_OP <> 'DELETE' AND periodo_situacao(NEW.periodo_id) = 'FECHADO' THEN
-      RAISE EXCEPTION 'Período fechado: não aceita novos lançamentos'
+    IF TG_OP <> 'DELETE' AND periodo_travado(NEW.periodo_id) THEN
+      RAISE EXCEPTION 'Período em conferência ou fechado: não aceita novos lançamentos'
         USING ERRCODE = 'check_violation';
     END IF;
   ELSE -- partida
     IF TG_OP <> 'INSERT' THEN
       SELECT periodo_id INTO pid FROM lancamento_contabil WHERE id = OLD.lancamento_id;
-      IF periodo_situacao(pid) = 'FECHADO' THEN
-        RAISE EXCEPTION 'Período fechado: partidas não podem ser alteradas'
+      IF periodo_travado(pid) THEN
+        RAISE EXCEPTION 'Período em conferência ou fechado: partidas não podem ser alteradas'
           USING ERRCODE = 'check_violation';
       END IF;
     END IF;
     IF TG_OP <> 'DELETE' THEN
       SELECT periodo_id INTO pid FROM lancamento_contabil WHERE id = NEW.lancamento_id;
-      IF periodo_situacao(pid) = 'FECHADO' THEN
-        RAISE EXCEPTION 'Período fechado: partidas não podem ser incluídas'
+      IF periodo_travado(pid) THEN
+        RAISE EXCEPTION 'Período em conferência ou fechado: partidas não podem ser incluídas'
           USING ERRCODE = 'check_violation';
       END IF;
     END IF;
@@ -227,7 +235,7 @@ CREATE TRIGGER partida_bloqueio_fechado
 
 -- Mudança de situação do período: exige uma linha em transicao_periodo gravada
 -- na MESMA transação (ocorrida_em = now(), que é o início da transação).
--- Sair de FECHADO exige perfil CONTADOR (ou ADMINISTRADOR) e justificativa
+-- Sair de FECHADO exige perfil CONTADOR e justificativa
 -- (garantida pelo CHECK em transicao_periodo).
 CREATE OR REPLACE FUNCTION trg_periodo_transicao() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -242,7 +250,7 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
   IF OLD.situacao = 'FECHADO'
-     AND coalesce(app_setting('app.perfil'), '') NOT IN ('CONTADOR','ADMINISTRADOR') THEN
+     AND coalesce(app_setting('app.perfil'), '') <> 'CONTADOR' THEN
     RAISE EXCEPTION 'Só o contador responsável pode reabrir um período fechado'
       USING ERRCODE = 'insufficient_privilege';
   END IF;

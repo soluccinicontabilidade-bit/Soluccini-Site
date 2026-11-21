@@ -1,0 +1,55 @@
+{
+  "name": "partida-dobrada",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de gestão contábil, BPO financeiro e IRPF",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit",
+    "db:migrate": "dotenv -e .env -- sh -c 'DATABASE_URL=\"$MIGRATE_DATABASE_URL\" prisma migrate deploy'",
+    "db:seed": "dotenv -e .env -- tsx prisma/seed.ts",
+    "test": "vitest run",
+    "test:e2e": "playwright test --trace off",
+    "postinstall": "prisma generate"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1175.0",
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/sora": "5.3.0",
+    "@node-rs/argon2": "2.2.2",
+    "@prisma/client": "6.19.0",
+    "lucide-react": "1.70.0",
+    "next": "16.4.5",
+    "nodemailer": "10.3.1",
+    "otplib": "12.0.1",
+    "papaparse": "5.7.1",
+    "pdfkit": "0.20.2",
+    "qrcode": "1.5.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "read-excel-file": "9.3.20",
+    "server-only": "0.0.1",
+    "write-excel-file": "4.1.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.5",
+    "@types/nodemailer": "8.0.2",
+    "@types/papaparse": "5.5.2",
+    "@types/pdfkit": "0.17.7",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "dotenv-cli": "11.1.0",
+    "prisma": "6.19.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

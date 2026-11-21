@@ -56,6 +56,18 @@ run "Contador não reabre sem justificativa" erro "$(ctx $E1 CONTADOR) insert in
  update periodo_contabil set situacao='ABERTO' where id='$P1';"
 run "Contador reabre com justificativa" ok "$(ctx $E1 CONTADOR) insert into transicao_periodo(id,escritorio_id,periodo_id,de,para,justificativa,usuario_id) values (gen_random_uuid(),'$E1','$P1','FECHADO','ABERTO','NF lançada em duplicidade','$U');
  update periodo_contabil set situacao='ABERTO' where id='$P1';"
+run "Mover período para em conferência" ok "$B insert into transicao_periodo(id,escritorio_id,periodo_id,de,para,justificativa,usuario_id) values (gen_random_uuid(),'$E1','$P1','ABERTO','EM_CONFERENCIA',null,'$U');
+ update periodo_contabil set situacao='EM_CONFERENCIA' where id='$P1';"
+run "Novo lançamento em conferência é recusado" erro "$B $L ('10000000-0000-0000-0000-000000000009','$E1','$C1','$P1','2026-03-12','x','MANUAL','$U');"
+run "Editar partida em conferência é recusado" erro "$B update partida set historico_complementar='x' where lancamento_id='10000000-0000-0000-0000-000000000001';"
+run "Contador fecha período em conferência" ok "$(ctx $E1 CONTADOR) insert into transicao_periodo(id,escritorio_id,periodo_id,de,para,justificativa,usuario_id) values (gen_random_uuid(),'$E1','$P1','EM_CONFERENCIA','FECHADO',null,'$U');
+ update periodo_contabil set situacao='FECHADO' where id='$P1';"
+run "Administrador não reabre período fechado" erro "$(ctx $E1 ADMINISTRADOR) insert into transicao_periodo(id,escritorio_id,periodo_id,de,para,justificativa,usuario_id) values (gen_random_uuid(),'$E1','$P1','FECHADO','ABERTO','correção','$U');
+ update periodo_contabil set situacao='ABERTO' where id='$P1';"
+run "Cliente em duas carteiras (BPO e IRPF)" ok "$(ctx $E1 ADMINISTRADOR)
+ insert into usuario(id,escritorio_id,nome,email,senha_hash,perfil,atualizado_em) values ('$U','$E1','Ana','ana@x.com','h','ANALISTA_BPO',now());
+ insert into carteira(id,escritorio_id,nome,responsavel_id) values ('a1000000-0000-0000-0000-000000000001','$E1','BPO','$U'),('a1000000-0000-0000-0000-000000000002','$E1','IRPF','$U');
+ insert into carteira_cliente(carteira_id,cliente_id,escritorio_id) values ('a1000000-0000-0000-0000-000000000001','$C1','$E1'),('a1000000-0000-0000-0000-000000000002','$C1','$E1');"
 run "Escritório 2 não enxerga dados do escritório 1 (RLS)" erro "$(ctx $E2) do \$\$begin if (select count(*) from lancamento_contabil)>0 or (select count(*) from cliente)>0 then raise exception 'vazou'; end if; raise exception 'nada visível (esperado)'; end\$\$;"
 run "Escritório 2 não grava com escritorio_id do 1 (RLS)" erro "$(ctx $E2) insert into etiqueta(id,escritorio_id,nome,cor) values (gen_random_uuid(),'$E1','x','#000000');"
 run "Sem app.escritorio_id não aparece nenhuma linha" erro "do \$\$begin if (select count(*) from cliente)>0 then raise exception 'vazou'; end if; raise exception 'nada visível (esperado)'; end\$\$;"
