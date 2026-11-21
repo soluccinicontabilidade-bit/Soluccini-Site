@@ -15,13 +15,20 @@ export default async function LayoutInterno({ children }: { children: React.Reac
     { href: "/clientes", rotulo: "Clientes", icone: "clientes" },
     { href: "/financeiro", rotulo: "Financeiro (BPO)", curto: "Financeiro", icone: "financeiro" },
     { href: "/contabilidade", rotulo: "Contabilidade", curto: "Contábil", icone: "contabil" },
+    { href: "/irpf", rotulo: "IRPF", icone: "irpf" },
     ...(pode(usuario.perfil, "importacao.clientes") ? [{ href: "/importacoes", rotulo: "Importar planilhas", curto: "Importar", icone: "importar" as const }] : []),
     ...(pode(usuario.perfil, "carteiras.gerenciar") ? [{ href: "/carteiras", rotulo: "Carteiras", icone: "carteiras" as const }] : []),
     ...(pode(usuario.perfil, "usuarios.gerenciar") ? [{ href: "/equipe", rotulo: "Equipe", icone: "equipe" as const }] : []),
     { href: "/conta", rotulo: "Minha conta", curto: "Conta", icone: "conta" },
   ];
   // No celular cabem 5 itens; Carteiras e Equipe ficam acessíveis pelo painel.
-  const inferior = itens.filter((i) => !["/carteiras", "/equipe", "/importacoes"].includes(i.href));
+  // No celular cabem 5 itens: os mais usados por cada perfil. O resto fica no painel e na lateral.
+  const prioridade: Record<string, string[]> = {
+    ANALISTA_IRPF: ["/", "/clientes", "/irpf", "/contabilidade", "/conta"],
+    ANALISTA_BPO: ["/", "/clientes", "/financeiro", "/contabilidade", "/conta"],
+  };
+  const escolhidos = prioridade[usuario.perfil] ?? ["/", "/clientes", "/financeiro", "/contabilidade", "/conta"];
+  const inferior = escolhidos.map((h) => itens.find((i) => i.href === h)).filter((i): i is ItemNav => !!i);
 
   return (
     <div className="app">

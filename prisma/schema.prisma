@@ -223,6 +223,7 @@ model Pessoa {
   vinculosComoEmpresa VinculoSocietario[] @relation("VinculoEmpresa")
   vinculosComoSocio   VinculoSocietario[] @relation("VinculoSocio")
   favorecidos         Favorecido[]
+  declaracoesIrpf     DeclaracaoIRPF[]
 
   @@unique([escritorioId, documentoHash])
   @@index([escritorioId, tipo])
@@ -323,6 +324,7 @@ model Cliente {
   configFinanceira  ConfigFinanceira?
   checklistBpo      ItemChecklistBpo[]
   regrasConciliacao RegraConciliacao[]
+  declaracaoIRPFs   DeclaracaoIRPF[]
 
   @@unique([escritorioId, codigo])
   @@index([escritorioId, situacao])
@@ -1151,4 +1153,145 @@ model ItemChecklistBpo {
 
   @@unique([clienteId, competencia, ordem])
   @@map("item_checklist_bpo")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 5: IRPF
+// -----------------------------------------------------------------------------
+
+// Tabelas, faixas, deduções e limites por ano-calendário, editáveis pelo
+// administrador. Nunca fixos no código. `confirmada` = conferida pelo escritório
+// nas fontes oficiais da Receita Federal.
+model TabelaIRPF {
+  id              String    @id @default(uuid()) @db.Uuid
+  escritorioId    String    @map("escritorio_id") @db.Uuid
+  anoCalendario   Int       @map("ano_calendario")
+  parametros      Json
+  confirmada      Boolean   @default(false)
+  fonte           String?
+  prazoEntrega    DateTime? @map("prazo_entrega") @db.Date
+  atualizadoPorId String?   @map("atualizado_por_id") @db.Uuid
+  atualizadoEm    DateTime  @default(now()) @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  @@unique([escritorioId, anoCalendario])
+  @@map("tabela_irpf")
+}
+
+enum SituacaoDeclaracao {
+  AGUARDANDO_DOCUMENTOS
+  EM_ANALISE
+  EM_DIGITACAO
+  EM_REVISAO
+  TRANSMITIDA
+  MALHA_FINA
+  FINALIZADA
+}
+
+enum ModeloDeclaracao {
+  COMPLETO
+  SIMPLIFICADO
+}
+
+model DeclaracaoIRPF {
+  id                String             @id @default(uuid()) @db.Uuid
+  escritorioId      String             @map("escritorio_id") @db.Uuid
+  pessoaId          String             @map("pessoa_id") @db.Uuid // contribuinte (PF)
+  clienteId         String             @map("cliente_id") @db.Uuid // quem contratou (o próprio PF ou a empresa do sócio)
+  anoCalendario     Int                @map("ano_calendario")
+  situacao          SituacaoDeclaracao @default(AGUARDANDO_DOCUMENTOS)
+  responsavelId     String?            @map("responsavel_id") @db.Uuid
+  prazo             DateTime?          @db.Date
+  honorarioCentavos BigInt?            @map("honorario_centavos")
+  honorarioPago     Boolean            @default(false) @map("honorario_pago")
+  modelo            ModeloDeclaracao?
+  resultadoCentavos BigInt?            @map("resultado_centavos") // positivo = imposto a pagar; negativo = restituição
+  recibo            String?
+  transmitidaEm     DateTime?          @map("transmitida_em") @db.Date
+  retificadora      Boolean            @default(false)
+  retificacoes      Int                @default(0)
+  pendenciasMalha   String?            @map("pendencias_malha")
+  simulacao         Json?
+  observacoes       String?
+  ultimoContatoEm   DateTime?          @map("ultimo_contato_em") @db.Timestamptz(3)
+  criadoEm          DateTime           @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  pessoa  Pessoa              @relation(fields: [pessoaId], references: [id])
+  cliente Cliente             @relation(fields: [clienteId], references: [id])
+  itens   ItemDocumentoIRPF[]
+  eventos EventoDeclaracao[]
+  links   LinkEnvio[]
+
+  @@unique([pessoaId, anoCalendario])
+  @@index([escritorioId, anoCalendario, situacao])
+  @@map("declaracao_irpf")
+}
+
+enum CategoriaItemIRPF {
+  INFORME_RENDIMENTOS
+  SAUDE
+  EDUCACAO
+  PREVIDENCIA
+  DEPENDENTES
+  BENS_DIREITOS
+  DIVIDAS
+  ALUGUEIS
+  CARNE_LEAO
+  RENDA_VARIAVEL
+  GANHO_CAPITAL
+  OUTROS
+}
+
+enum SituacaoItemIRPF {
+  PENDENTE
+  RECEBIDO
+  CONFERIDO
+  NAO_SE_APLICA
+}
+
+model ItemDocumentoIRPF {
+  id           String            @id @default(uuid()) @db.Uuid
+  escritorioId String            @map("escritorio_id") @db.Uuid
+  declaracaoId String            @map("declaracao_id") @db.Uuid
+  categoria    CategoriaItemIRPF
+  descricao    String
+  situacao     SituacaoItemIRPF  @default(PENDENTE)
+  documentoId  String?           @map("documento_id") @db.Uuid
+  observacao   String?
+  atualizadoEm DateTime          @default(now()) @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  declaracao DeclaracaoIRPF @relation(fields: [declaracaoId], references: [id], onDelete: Cascade)
+
+  @@index([declaracaoId])
+  @@map("item_documento_irpf")
+}
+
+model EventoDeclaracao {
+  id           String   @id @default(uuid()) @db.Uuid
+  escritorioId String   @map("escritorio_id") @db.Uuid
+  declaracaoId String   @map("declaracao_id") @db.Uuid
+  resumo       String
+  usuarioId    String?  @map("usuario_id") @db.Uuid
+  ocorridoEm   DateTime @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+
+  declaracao DeclaracaoIRPF @relation(fields: [declaracaoId], references: [id], onDelete: Cascade)
+
+  @@index([declaracaoId, ocorridoEm])
+  @@map("evento_declaracao")
+}
+
+// Link para o contribuinte enviar documentos sem login. Só o hash do token fica no banco.
+model LinkEnvio {
+  id           String    @id @default(uuid()) @db.Uuid
+  escritorioId String    @map("escritorio_id") @db.Uuid
+  declaracaoId String    @map("declaracao_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  expiraEm     DateTime  @map("expira_em") @db.Timestamptz(3)
+  criadoPorId  String    @map("criado_por_id") @db.Uuid
+  criadoEm     DateTime  @default(now()) @map("criado_em") @db.Timestamptz(3)
+  ultimoUsoEm  DateTime? @map("ultimo_uso_em") @db.Timestamptz(3)
+  revogadoEm   DateTime? @map("revogado_em") @db.Timestamptz(3)
+
+  declaracao DeclaracaoIRPF @relation(fields: [declaracaoId], references: [id], onDelete: Cascade)
+
+  @@map("link_envio")
 }

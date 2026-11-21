@@ -11,6 +11,7 @@ import { copiarPlanoParaCliente, garantirModeloPadrao } from "../src/lib/contabi
 import { aplicarSaldosIniciais, criarLancamento, lerCompetencia } from "../src/lib/contabil/lancamentos";
 import { contasQuePedemJustificativa, mudarSituacaoPeriodo } from "../src/lib/contabil/periodos";
 import { criarContaBancaria, criarTitulo, garantirCategoriasPadrao } from "../src/lib/financeiro/financeiro";
+import { criarDeclaracao } from "../src/lib/irpf/irpf";
 
 function dv(base: string, pesos: number[]) {
   const soma = pesos.reduce((s, p, i) => s + p * Number(base[i]), 0);
@@ -189,7 +190,7 @@ async function semearFinanceiro() {
   const autor = { id: admin.id, escritorioId: admin.escritorioId, perfil: admin.perfil };
   const feito = await comEscritorio(ctx, (tx) => tx.contaBancaria.count());
   if (feito > 0) {
-    console.log("Dados de demonstração já existem. Nada a fazer.");
+    await semearIrpf();
     return;
   }
   await comEscritorio(ctx, async (tx) => {
@@ -207,6 +208,24 @@ async function semearFinanceiro() {
     await T({ tipo: "PAGAR", descricao: "Pró-labore Mariana", favorecido: "Mariana Souza", documentoFavorecido: "12345678909", competencia: "2026-04", valor: "3.000,00", primeiroVencimento: "2026-05-05", categoriaId: await cat("Pró-labore") });
   }, { timeout: 60000 });
   console.log("Financeiro de demonstração criado: conta Itaú da padaria e títulos de abril/2026. Importe exemplos/extrato-padaria-2026-04.ofx para testar a conciliação.");
+  await semearIrpf();
+}
+
+// Fase 5: declaração 2026 da Mariana (cliente PF e sócia da padaria).
+async function semearIrpf() {
+  const [admin] = await comAutenticacao({ email: "admin@soluccini.local" }, (tx) => tx.usuario.findMany({ where: { email: "admin@soluccini.local" } }));
+  const ctx = { escritorioId: admin.escritorioId, usuarioId: admin.id, perfil: admin.perfil, origem: "seed" };
+  const autor = { id: admin.id, escritorioId: admin.escritorioId, perfil: admin.perfil };
+  await comEscritorio(ctx, async (tx) => {
+    if (await tx.declaracaoIRPF.count({ where: { anoCalendario: 2026 } })) {
+      console.log("Dados de demonstração já existem. Nada a fazer.");
+      return;
+    }
+    const mariana = await tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: "Mariana Souza" } } });
+    const irene = await tx.usuario.findFirst({ where: { perfil: "ANALISTA_IRPF" } });
+    await criarDeclaracao(tx, autor, { pessoaId: mariana.pessoaId, clienteId: mariana.id, ano: 2026, responsavelId: irene?.id, honorario: "450,00" });
+    console.log("IRPF de demonstração criado: declaração 2026 da Mariana Souza.");
+  });
 }
 
 main()

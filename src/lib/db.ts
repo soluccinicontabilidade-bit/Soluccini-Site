@@ -61,6 +61,15 @@ export async function comAutenticacao<T>(
   });
 }
 
+/** Transação para o link público de envio de documentos (antes de saber o escritório). */
+export async function comLinkPublico<T>(tokenHash: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await definir(tx, "app.auth_link_hash", tokenHash);
+    await definir(tx, "app.origem", "web:link-envio");
+    return fn(tx);
+  }, { timeout: 60000 });
+}
+
 export function ehViolacaoUnica(e: unknown, campo?: string): boolean {
   if (!(e instanceof Prisma.PrismaClientKnownRequestError) || e.code !== "P2002") return false;
   if (!campo) return true;
