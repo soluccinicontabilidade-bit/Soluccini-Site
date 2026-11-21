@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { comEscritorio } from "@/lib/db";
 import { ativarTotp, confirmarSegundoFator, entrarComSenha, lerSessao, MAX_TENTATIVAS, prepararTotp } from "@/lib/auth/login";
 import { alterarUsuario, redefinirAcesso } from "@/lib/equipe";
-import { codigoTotp, novoEscritorio, SENHA, temBanco } from "./ajuda";
+import { codigoTotp, codigoTotpSeguinte, novoEscritorio, SENHA, temBanco } from "./ajuda";
 
 describe.skipIf(!temBanco)("login e verificação em duas etapas (banco real)", () => {
   it("fluxo completo: senha, ativação do 2FA, novo login com código", async () => {
@@ -25,7 +25,9 @@ describe.skipIf(!temBanco)("login e verificação em duas etapas (banco real)", 
     expect(r2.totpAtivo).toBe(true);
     const s2 = (await lerSessao(r2.token))!;
     expect(s2.doisFatoresOk).toBe(false);
-    expect(await confirmarSegundoFator(s2, codigoTotp(segredo))).toEqual({ ok: true });
+    // O código usado na ativação não vale de novo (proteção contra reuso).
+    expect((await confirmarSegundoFator(s2, codigoTotp(segredo))).ok).toBe(false);
+    expect(await confirmarSegundoFator(s2, codigoTotpSeguinte(segredo))).toEqual({ ok: true });
 
     // Código de recuperação vale uma única vez.
     const r3 = await entrarComSenha(e.contador.email, SENHA);

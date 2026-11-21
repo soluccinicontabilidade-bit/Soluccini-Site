@@ -49,13 +49,32 @@ export async function exigirAcesso(acao?: Acao): Promise<Acesso> {
   if (!s) redirect("/entrar");
   if (!s.usuario.totpAtivo) redirect("/entrar/ativar-2fa");
   if (!s.doisFatoresOk) redirect("/entrar/verificacao");
-  if (!pode(s.usuario.perfil, "area.interna")) redirect("/entrar?motivo=portal");
+  if (!pode(s.usuario.perfil, "area.interna")) redirect("/portal");
   if (acao && !pode(s.usuario.perfil, acao)) redirect("/sem-permissao");
   const ip = await ipDaRequisicao();
   return {
     ...s,
     ctx: { escritorioId: s.usuario.escritorioId, usuarioId: s.usuario.id, perfil: s.usuario.perfil, ip, origem: "web" },
   };
+}
+
+/** Portal do cliente: usuários CLIENTE_LEITOR e CLIENTE_APROVADOR, com 2FA. */
+export async function exigirAcessoPortal(): Promise<Acesso> {
+  const s = await sessaoAtual();
+  if (!s) redirect("/entrar");
+  if (!s.usuario.totpAtivo) redirect("/entrar/ativar-2fa");
+  if (!s.doisFatoresOk) redirect("/entrar/verificacao");
+  if (s.usuario.perfil !== "CLIENTE_LEITOR" && s.usuario.perfil !== "CLIENTE_APROVADOR") redirect("/");
+  const ip = await ipDaRequisicao();
+  return { ...s, ctx: { escritorioId: s.usuario.escritorioId, usuarioId: s.usuario.id, perfil: s.usuario.perfil, ip, origem: "portal" } };
+}
+
+export async function acessoPortalParaAcao(): Promise<Acesso | null> {
+  const s = await sessaoAtual();
+  if (!s || !s.usuario.totpAtivo || !s.doisFatoresOk) return null;
+  if (s.usuario.perfil !== "CLIENTE_LEITOR" && s.usuario.perfil !== "CLIENTE_APROVADOR") return null;
+  const ip = await ipDaRequisicao();
+  return { ...s, ctx: { escritorioId: s.usuario.escritorioId, usuarioId: s.usuario.id, perfil: s.usuario.perfil, ip, origem: "portal" } };
 }
 
 /** Para ações de formulário: mesma checagem, mas sem redirecionar no meio de um POST. */

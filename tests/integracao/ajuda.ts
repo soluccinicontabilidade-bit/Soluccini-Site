@@ -42,3 +42,5 @@ export async function novoEscritorio() {
 }
 
 export const codigoTotp = (segredo: string) => authenticator.generate(segredo);
+/** Código da próxima janela de 30 s (aceito pela tolerância de 1 janela). */
+export const codigoTotpSeguinte = (segredo: string) => authenticator.clone({ epoch: Date.now() + 30_000 }).generate(segredo);

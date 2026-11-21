@@ -10,6 +10,16 @@ export const gerarSegredoTotp = () => authenticator.generateSecret(20);
 export const codigoTotpConfere = (segredo: string, codigo: string) =>
   authenticator.check(codigo.replace(/\s/g, ""), segredo);
 
+/**
+ * Confere o código e devolve o passo de tempo (janela de 30 s) a que ele
+ * pertence, ou null. Guardar o último passo aceito impede reusar o código.
+ */
+export function passoDoCodigo(segredo: string, codigo: string): bigint | null {
+  const delta = authenticator.checkDelta(codigo.replace(/\s/g, ""), segredo);
+  if (delta === null) return null;
+  return BigInt(Math.floor(Date.now() / 30_000) + delta);
+}
+
 export async function qrCodeTotp(segredo: string, email: string): Promise<string> {
   const emissor = process.env.TOTP_EMISSOR || "Soluccini";
   const uri = authenticator.keyuri(email, emissor, segredo);

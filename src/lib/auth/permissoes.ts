@@ -30,7 +30,11 @@ export type Acao =
   | "financeiro.config"
   | "irpf.ver"
   | "irpf.operar"
-  | "irpf.tabelas";
+  | "irpf.tabelas"
+  | "cobranca.gerenciar"
+  | "configuracoes"
+  | "portal.gerenciar"
+  | "lgpd.exportar";
 
 const INTERNOS: PerfilUsuario[] = ["ADMINISTRADOR", "CONTADOR", "ANALISTA_BPO", "ANALISTA_IRPF"];
 
@@ -56,6 +60,10 @@ const REGRAS: Record<Acao, PerfilUsuario[]> = {
   "irpf.ver": INTERNOS,
   "irpf.operar": ["ADMINISTRADOR", "CONTADOR", "ANALISTA_IRPF"],
   "irpf.tabelas": ["ADMINISTRADOR"],
+  "cobranca.gerenciar": ["ADMINISTRADOR", "CONTADOR"],
+  "configuracoes": ["ADMINISTRADOR"],
+  "portal.gerenciar": ["ADMINISTRADOR", "CONTADOR"],
+  "lgpd.exportar": ["ADMINISTRADOR"],
 };
 
 export const pode = (perfil: PerfilUsuario, acao: Acao) => REGRAS[acao].includes(perfil);

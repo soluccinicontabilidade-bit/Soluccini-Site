@@ -11,6 +11,10 @@ import {
 } from "@/lib/clientes";
 import { formatarBp, formatarData, formatarDocumento, formatarInstante, formatarReais, hojeSaoPaulo, isoData, mascararDocumento } from "@/lib/br";
 import { EXTENSOES_ACEITAS } from "@/lib/documentos";
+import { saldoDaConta } from "@/lib/financeiro/financeiro";
+import { TIPOS_RELATORIO } from "@/lib/contabil/montar";
+import { TIPOS_RELATORIO_FIN } from "@/lib/financeiro/relatorios";
+import { acaoAcessoPortal, acaoAgendamento, acaoDesativarAgendamento, acaoRemoverAcesso, acaoSolicitarAceite } from "../../acoes-gestao";
 import { BotaoEnviar, Campo, Formulario } from "@/components/Formulario";
 import { Selo, SeloSituacao } from "@/components/Selo";
 import {
@@ -26,6 +30,7 @@ const ABAS = [
   ["contrato", "Contrato"],
   ["documentos", "Documentos"],
   ["entrada", "Entrada"],
+  ["portal", "Portal"],
   ["historico", "Histórico"],
 ] as const;
 type Aba = (typeof ABAS)[number][0];
@@ -57,15 +62,30 @@ export default async function Cliente({ params, searchParams }: { params: Promis
       tx.eventoCliente.findMany({ where: { clienteId: id }, orderBy: { ocorridoEm: "desc" }, take: 100 }),
       tx.usuario.findMany({ select: { id: true, nome: true } }),
     ]);
+    const mesAtual = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
+    const contasBanc = await tx.contaBancaria.findMany({ where: { clienteId: id, ativa: true } });
+    const resumo = {
+      caixa: contasBanc.length ? (await Promise.all(contasBanc.map((cb) => saldoDaConta(tx, cb.id, hojeSaoPaulo())))).reduce((a, b) => a + b, 0n) : null,
+      resultadoMes: (await tx.rateioTitulo.findMany({ where: { titulo: { clienteId: id, canceladoEm: null, competencia: { gte: mesAtual } } }, include: { titulo: { select: { tipo: true } } } })).reduce((a, r) => a + (r.titulo.tipo === "RECEBER" ? r.valorCentavos : -r.valorCentavos), 0n),
+      vencidas: await tx.parcela.count({ where: { clienteId: id, situacao: { in: ["ABERTA", "APROVADA", "REPROVADA"] }, vencimento: { lt: hojeSaoPaulo() }, titulo: { canceladoEm: null } } }),
+      conciliar: await tx.transacaoBancaria.count({ where: { clienteId: id, situacao: { in: ["PENDENTE", "SUGERIDA"] } } }),
+      docsIrpf: await tx.itemDocumentoIRPF.count({ where: { situacao: "PENDENTE", declaracao: { clienteId: id, situacao: "AGUARDANDO_DOCUMENTOS" } } }),
+      docsVencidos: await tx.documento.count({ where: { clienteId: id, excluidoEm: null, validoAte: { lt: hojeSaoPaulo() } } }),
+    };
+    const portal = {
+      acessos: await tx.acessoCliente.findMany({ where: { clienteId: id }, include: { usuario: true } }),
+      agendamentos: await tx.agendamentoRelatorio.findMany({ where: { clienteId: id }, include: { envios: { orderBy: { ocorridoEm: "desc" }, take: 1 } }, orderBy: { criadoEm: "desc" } }),
+      aceites: await tx.solicitacaoAceite.findMany({ where: { clienteId: id }, include: { aceites: true }, orderBy: { criadoEm: "desc" } }),
+    };
     // Empresas em que esta pessoa é sócia (útil para PF: base do IRPF).
     const participacoes = await tx.vinculoSocietario.findMany({
       where: { socioId: c.pessoaId },
       include: { empresa: { include: { cliente: { select: { id: true } } } } },
     });
-    return { c, extra, vinculos, contratos, documentos, categorias, checklist, eventos, autores, participacoes };
+    return { c, extra, vinculos, contratos, documentos, categorias, checklist, eventos, autores, participacoes, portal, resumo };
   });
   if (!dados) notFound();
-  const { c, extra, vinculos, contratos, documentos, categorias, checklist, eventos, autores, participacoes } = dados;
+  const { c, extra, vinculos, contratos, documentos, categorias, checklist, eventos, autores, participacoes, portal, resumo } = dados;
   const p = c.pessoa;
   const aba: Aba = (ABAS.find(([k]) => k === sp.aba)?.[0] ?? "dados") as Aba;
   const hoje = hojeSaoPaulo();
@@ -108,6 +128,14 @@ export default async function Cliente({ params, searchParams }: { params: Promis
         ))}
       </nav>
 
+      {aba === "dados" && (
+        <section className="grade grade-3" aria-label="Situação agora">
+          <div className="cartao indicador"><span className="rotulo">Caixa hoje</span><span className="valor" style={{ fontSize: 20 }}>{resumo.caixa === null ? "—" : formatarReais(resumo.caixa)}</span></div>
+          <div className="cartao indicador"><span className="rotulo">Resultado do mês (gerencial)</span><span className="valor" style={{ fontSize: 20 }}>{formatarReais(resumo.resultadoMes)}</span></div>
+          <div className="cartao indicador"><span className="rotulo">Pendências</span>
+            <span className="pequeno">{resumo.vencidas} conta(s) vencida(s) · {resumo.conciliar} transação(ões) a conciliar · {resumo.docsIrpf} documento(s) de IRPF pendente(s) · {resumo.docsVencidos} documento(s) vencido(s)</span></div>
+        </section>
+      )}
       {aba === "dados" && (
         <div className="grade grade-2">
           <section className="cartao">
@@ -425,6 +453,75 @@ export default async function Cliente({ params, searchParams }: { params: Promis
             </Formulario>
           )}
         </section>
+      )}
+
+      {aba === "portal" && (
+        <div className="pilha">
+          <section className="cartao pilha">
+            <h2>Acessos ao portal do cliente</h2>
+            <p className="pequeno suave">O leitor vê relatórios fechados, documentos, IRPF e honorários, e envia arquivos. O aprovador também aprova pagamentos (com aprovador cadastrado, os pagamentos do BPO passam a exigir aprovação).</p>
+            {portal.acessos.length === 0 ? <p className="suave">Ninguém tem acesso ainda.</p> : (
+              <ul className="pilha" style={{ listStyle: "none", padding: 0, margin: 0, gap: 8 }}>
+                {portal.acessos.map((a) => (
+                  <li key={a.usuarioId} className="linha" style={{ justifyContent: "space-between" }}>
+                    <span>{a.usuario.nome} · {a.usuario.email} · <Selo tom="neutro">{a.usuario.perfil === "CLIENTE_APROVADOR" ? "Aprovador" : "Leitor"}</Selo> {!a.usuario.totpAtivadoEm && <Selo tom="atencao">Aguardando primeiro acesso</Selo>}</span>
+                    {pode(usuario.perfil, "portal.gerenciar") && <Formulario acao={acaoRemoverAcesso.bind(null, id, a.usuarioId)} confirmar={`Remover o acesso de ${a.usuario.nome}?`}><BotaoEnviar className="texto pequeno">Remover</BotaoEnviar></Formulario>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {pode(usuario.perfil, "portal.gerenciar") && (
+              <details className="painel-form"><summary>Dar acesso</summary><div>
+                <Formulario acao={acaoAcessoPortal.bind(null, id)} className="campos campos-3" limparAoConcluir>
+                  <Campo nome="nome" rotulo="Nome" obrigatorio />
+                  <Campo nome="email" rotulo="E-mail" tipo="email" obrigatorio />
+                  <Campo nome="perfil" rotulo="Perfil" valor="CLIENTE_LEITOR" opcoes={[{ valor: "CLIENTE_LEITOR", rotulo: "Leitor" }, { valor: "CLIENTE_APROVADOR", rotulo: "Aprovador de pagamentos" }]} />
+                  <div className="ocupa-tudo"><BotaoEnviar>Liberar acesso</BotaoEnviar></div>
+                </Formulario>
+              </div></details>
+            )}
+          </section>
+          <section className="cartao pilha">
+            <h2>Relatórios enviados todo mês</h2>
+            <p className="pequeno suave">No dia escolhido, o relatório do mês anterior vai em PDF por e-mail (se o servidor tiver e-mail configurado) e fica guardado nos documentos do cliente.</p>
+            {portal.agendamentos.map((ag) => (
+              <div key={ag.id} className="linha" style={{ justifyContent: "space-between" }}>
+                <span className="pequeno">{ag.modulo === "CONTABIL" ? TIPOS_RELATORIO[ag.tipo as keyof typeof TIPOS_RELATORIO] : TIPOS_RELATORIO_FIN[ag.tipo as keyof typeof TIPOS_RELATORIO_FIN]} · dia {ag.diaDoMes} · {ag.destinatarios.join(", ") || "sem e-mail"} {ag.ativo ? "" : "(desativado)"}{ag.envios[0] ? ` · último: ${ag.envios[0].situacao.toLowerCase().replace(/_/g, " ")}` : ""}</span>
+                {ag.ativo && pode(usuario.perfil, "portal.gerenciar") && <form action={acaoDesativarAgendamento.bind(null, id, ag.id)}><button className="botao texto pequeno" type="submit">Desativar</button></form>}
+              </div>
+            ))}
+            {pode(usuario.perfil, "portal.gerenciar") && (
+              <Formulario acao={acaoAgendamento.bind(null, id)} className="campos campos-3" limparAoConcluir>
+                <Campo nome="relatorio" rotulo="Relatório" opcoes={[...Object.entries(TIPOS_RELATORIO).map(([k, v]) => ({ valor: `CONTABIL:${k}`, rotulo: `Contábil · ${v}` })), ...Object.entries(TIPOS_RELATORIO_FIN).map(([k, v]) => ({ valor: `FINANCEIRO:${k}`, rotulo: `Financeiro · ${v}` }))]} />
+                <Campo nome="dia" rotulo="Dia do mês" tipo="number" valor="5" />
+                <Campo nome="destinatarios" rotulo="E-mails" valor={c.pessoa.email} ajuda="Separados por vírgula." />
+                <div className="ocupa-tudo"><BotaoEnviar className="secundario">Agendar envio</BotaoEnviar></div>
+              </Formulario>
+            )}
+          </section>
+          <section className="cartao pilha">
+            <h2>Aceite de documentos</h2>
+            <p className="pequeno suave">O cliente lê e aceita no portal (assinatura eletrônica simples, com registro de quem, quando, de onde e o hash do arquivo).</p>
+            {portal.aceites.map((s) => {
+              const doc = documentos.find((d) => d.id === s.documentoId);
+              return <div key={s.id} className="pequeno">{doc?.titulo ?? "Documento"}: {s.aceites.length ? s.aceites.map((a) => `aceito por ${a.nomeUsuario} em ${formatarInstante(a.aceitoEm)} (IP ${a.ip ?? "?"}, SHA-256 ${a.sha256Documento.slice(0, 12)}…)`).join("; ") : "aguardando aceite"}</div>;
+            })}
+            {pode(usuario.perfil, "portal.gerenciar") && documentos.length > 0 && (
+              <Formulario acao={acaoSolicitarAceite.bind(null, id)} className="campos campos-2" limparAoConcluir>
+                <Campo nome="documentoId" rotulo="Documento" opcoes={documentos.map((d) => ({ valor: d.id, rotulo: d.titulo }))} />
+                <Campo nome="mensagem" rotulo="Mensagem ao cliente" placeholder="Ex.: Contrato de prestação de serviços 2026" />
+                <div className="ocupa-tudo"><BotaoEnviar className="secundario">Pedir aceite</BotaoEnviar></div>
+              </Formulario>
+            )}
+          </section>
+          {pode(usuario.perfil, "lgpd.exportar") && (
+            <section className="cartao pilha">
+              <h2>LGPD</h2>
+              <p className="pequeno">Exporta, em arquivo, todos os dados pessoais guardados sobre o titular (para atender pedido de acesso).</p>
+              <a className="botao secundario pequeno" href={`/api/titular/${c.pessoaId}`} style={{ justifySelf: "start" }}>Exportar dados do titular</a>
+            </section>
+          )}
+        </div>
       )}
 
       {aba === "historico" && (

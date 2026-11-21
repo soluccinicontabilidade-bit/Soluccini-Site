@@ -72,6 +72,8 @@ model Usuario {
   // 2FA (TOTP). O segredo é cifrado na aplicação.
   totpSegredoCifrado Bytes?        @map("totp_segredo_cifrado")
   totpAtivadoEm      DateTime?     @map("totp_ativado_em") @db.Timestamptz(3)
+  // Último passo de tempo (30 s) aceito: impede reusar o mesmo código.
+  totpUltimoPasso    BigInt?       @map("totp_ultimo_passo")
   tentativasFalhas   Int           @default(0) @map("tentativas_falhas")
   bloqueadoAte       DateTime?     @map("bloqueado_ate") @db.Timestamptz(3)
   ultimoAcessoEm     DateTime?     @map("ultimo_acesso_em") @db.Timestamptz(3)
@@ -303,28 +305,32 @@ model Cliente {
   atualizadoEm   DateTime        @updatedAt @map("atualizado_em") @db.Timestamptz(3)
   excluidoEm     DateTime?       @map("excluido_em") @db.Timestamptz(3)
 
-  escritorio        Escritorio             @relation(fields: [escritorioId], references: [id])
-  pessoa            Pessoa                 @relation(fields: [pessoaId], references: [id])
-  carteiras         CarteiraCliente[]
-  acessos           AcessoCliente[]
-  etiquetas         ClienteEtiqueta[]
-  contratos         Contrato[]
-  documentos        Documento[]
-  checklistEntrada  ItemChecklistEntrada[]
-  eventos           EventoCliente[]
-  planoDeContas     PlanoDeContas?
-  periodos          PeriodoContabil[]
-  lancamentos       LancamentoContabil[]
-  importacoes       Importacao[]
-  contasBancarias   ContaBancaria[]
-  categoriasFin     CategoriaFinanceira[]
-  centrosDeCusto    CentroDeCusto[]
-  favorecidos       Favorecido[]
-  titulos           TituloFinanceiro[]
-  configFinanceira  ConfigFinanceira?
-  checklistBpo      ItemChecklistBpo[]
-  regrasConciliacao RegraConciliacao[]
-  declaracaoIRPFs   DeclaracaoIRPF[]
+  escritorio            Escritorio             @relation(fields: [escritorioId], references: [id])
+  pessoa                Pessoa                 @relation(fields: [pessoaId], references: [id])
+  carteiras             CarteiraCliente[]
+  acessos               AcessoCliente[]
+  etiquetas             ClienteEtiqueta[]
+  contratos             Contrato[]
+  documentos            Documento[]
+  checklistEntrada      ItemChecklistEntrada[]
+  eventos               EventoCliente[]
+  planoDeContas         PlanoDeContas?
+  periodos              PeriodoContabil[]
+  lancamentos           LancamentoContabil[]
+  importacoes           Importacao[]
+  contasBancarias       ContaBancaria[]
+  categoriasFin         CategoriaFinanceira[]
+  centrosDeCusto        CentroDeCusto[]
+  favorecidos           Favorecido[]
+  titulos               TituloFinanceiro[]
+  configFinanceira      ConfigFinanceira?
+  checklistBpo          ItemChecklistBpo[]
+  regrasConciliacao     RegraConciliacao[]
+  declaracaoIRPFs       DeclaracaoIRPF[]
+  tarefas               Tarefa[]
+  agendamentoRelatorios AgendamentoRelatorio[]
+  cobrancas             Cobranca[]
+  solicitacaoAceites    SolicitacaoAceite[]
 
   @@unique([escritorioId, codigo])
   @@index([escritorioId, situacao])
@@ -1294,4 +1300,195 @@ model LinkEnvio {
   declaracao DeclaracaoIRPF @relation(fields: [declaracaoId], references: [id], onDelete: Cascade)
 
   @@map("link_envio")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 6: tarefas, notificações, relatórios agendados, segurança
+// -----------------------------------------------------------------------------
+
+// Tentativas de login por IP (limite contra força bruta). Sem escritório: o IP vem antes do login.
+model TentativaAcesso {
+  id         BigInt   @id @default(autoincrement())
+  ip         String   @db.Inet
+  ocorridaEm DateTime @default(now()) @map("ocorrida_em") @db.Timestamptz(3)
+
+  @@index([ip, ocorridaEm])
+  @@map("tentativa_acesso")
+}
+
+enum RecorrenciaTarefa {
+  NENHUMA
+  MENSAL
+  ANUAL
+}
+
+model Tarefa {
+  id             String            @id @default(uuid()) @db.Uuid
+  escritorioId   String            @map("escritorio_id") @db.Uuid
+  clienteId      String?           @map("cliente_id") @db.Uuid
+  titulo         String
+  descricao      String?
+  responsavelId  String?           @map("responsavel_id") @db.Uuid
+  prazo          DateTime          @db.Date
+  recorrencia    RecorrenciaTarefa @default(NENHUMA)
+  concluidaEm    DateTime?         @map("concluida_em") @db.Timestamptz(3)
+  concluidaPorId String?           @map("concluida_por_id") @db.Uuid
+  anteriorId     String?           @unique @map("anterior_id") @db.Uuid
+  criadoPorId    String            @map("criado_por_id") @db.Uuid
+  criadoEm       DateTime          @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  cliente Cliente? @relation(fields: [clienteId], references: [id])
+
+  @@index([escritorioId, prazo])
+  @@index([responsavelId, concluidaEm])
+  @@map("tarefa")
+}
+
+model Notificacao {
+  id           String    @id @default(uuid()) @db.Uuid
+  escritorioId String    @map("escritorio_id") @db.Uuid
+  usuarioId    String    @map("usuario_id") @db.Uuid
+  titulo       String
+  link         String?
+  chave        String // evita repetir o mesmo aviso no mesmo dia
+  lidaEm       DateTime? @map("lida_em") @db.Timestamptz(3)
+  criadaEm     DateTime  @default(now()) @map("criada_em") @db.Timestamptz(3)
+
+  @@unique([usuarioId, chave])
+  @@index([usuarioId, lidaEm])
+  @@map("notificacao")
+}
+
+enum ModuloRelatorio {
+  CONTABIL
+  FINANCEIRO
+}
+
+model AgendamentoRelatorio {
+  id                String          @id @default(uuid()) @db.Uuid
+  escritorioId      String          @map("escritorio_id") @db.Uuid
+  clienteId         String          @map("cliente_id") @db.Uuid
+  modulo            ModuloRelatorio
+  tipo              String
+  diaDoMes          Int             @map("dia_do_mes")
+  destinatarios     String[]
+  ativo             Boolean         @default(true)
+  ultimaCompetencia DateTime?       @map("ultima_competencia") @db.Date
+  criadoPorId       String          @map("criado_por_id") @db.Uuid
+  criadoEm          DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  cliente Cliente          @relation(fields: [clienteId], references: [id])
+  envios  EnvioRelatorio[]
+
+  @@map("agendamento_relatorio")
+}
+
+enum SituacaoEnvio {
+  ENVIADO
+  GUARDADO_SEM_EMAIL
+  FALHOU
+}
+
+model EnvioRelatorio {
+  id            String        @id @default(uuid()) @db.Uuid
+  escritorioId  String        @map("escritorio_id") @db.Uuid
+  agendamentoId String        @map("agendamento_id") @db.Uuid
+  competencia   DateTime      @db.Date
+  situacao      SituacaoEnvio
+  documentoId   String?       @map("documento_id") @db.Uuid
+  erro          String?
+  ocorridoEm    DateTime      @default(now()) @map("ocorrido_em") @db.Timestamptz(3)
+
+  agendamento AgendamentoRelatorio @relation(fields: [agendamentoId], references: [id], onDelete: Cascade)
+
+  @@map("envio_relatorio")
+}
+
+// -----------------------------------------------------------------------------
+// FASE 7: cobrança de honorários e aceite de documentos
+// -----------------------------------------------------------------------------
+
+model ConfigEscritorio {
+  escritorioId     String  @id @map("escritorio_id") @db.Uuid
+  chavePix         String? @map("chave_pix")
+  nomeRecebedor    String? @map("nome_recebedor") @db.VarChar(25)
+  cidadeRecebedor  String? @map("cidade_recebedor") @db.VarChar(15)
+  provedorCobranca String  @default("pix-estatico") @map("provedor_cobranca")
+
+  @@map("config_escritorio")
+}
+
+enum SituacaoCobranca {
+  PENDENTE
+  PAGA
+  CANCELADA
+}
+
+model Cobranca {
+  id                 String           @id @default(uuid()) @db.Uuid
+  escritorioId       String           @map("escritorio_id") @db.Uuid
+  clienteId          String           @map("cliente_id") @db.Uuid
+  contratoId         String?          @map("contrato_id") @db.Uuid
+  competencia        DateTime         @db.Date
+  descricao          String
+  valorCentavos      BigInt           @map("valor_centavos")
+  vencimento         DateTime         @db.Date
+  situacao           SituacaoCobranca @default(PENDENTE)
+  provedor           String
+  txid               String           @unique @db.VarChar(25)
+  pixCopiaECola      String?          @map("pix_copia_e_cola")
+  idExterno          String?          @map("id_externo")
+  linhaDigitavel     String?          @map("linha_digitavel")
+  urlBoleto          String?          @map("url_boleto")
+  pagaEm             DateTime?        @map("paga_em") @db.Date
+  valorPagoCentavos  BigInt?          @map("valor_pago_centavos")
+  baixaPorId         String?          @map("baixa_por_id") @db.Uuid
+  canceladaEm        DateTime?        @map("cancelada_em") @db.Timestamptz(3)
+  motivoCancelamento String?          @map("motivo_cancelamento")
+  criadoPorId        String           @map("criado_por_id") @db.Uuid
+  criadoEm           DateTime         @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  cliente Cliente @relation(fields: [clienteId], references: [id])
+
+  @@unique([contratoId, competencia])
+  @@index([escritorioId, situacao, vencimento])
+  @@map("cobranca")
+}
+
+// Pedido para o cliente ler e aceitar um documento no portal (assinatura eletrônica simples).
+model SolicitacaoAceite {
+  id              String    @id @default(uuid()) @db.Uuid
+  escritorioId    String    @map("escritorio_id") @db.Uuid
+  clienteId       String    @map("cliente_id") @db.Uuid
+  documentoId     String    @map("documento_id") @db.Uuid
+  versaoId        String    @map("versao_id") @db.Uuid
+  mensagem        String?
+  solicitadoPorId String    @map("solicitado_por_id") @db.Uuid
+  criadoEm        DateTime  @default(now()) @map("criado_em") @db.Timestamptz(3)
+  canceladaEm     DateTime? @map("cancelada_em") @db.Timestamptz(3)
+
+  cliente Cliente           @relation(fields: [clienteId], references: [id])
+  aceites AceiteDocumento[]
+
+  @@index([clienteId])
+  @@map("solicitacao_aceite")
+}
+
+// Evidência do aceite: quem, quando, de onde e o hash exato do arquivo aceito.
+model AceiteDocumento {
+  id              String   @id @default(uuid()) @db.Uuid
+  escritorioId    String   @map("escritorio_id") @db.Uuid
+  solicitacaoId   String   @map("solicitacao_id") @db.Uuid
+  usuarioId       String   @map("usuario_id") @db.Uuid
+  nomeUsuario     String   @map("nome_usuario")
+  emailUsuario    String   @map("email_usuario")
+  sha256Documento String   @map("sha256_documento") @db.Char(64)
+  ip              String?  @db.Inet
+  userAgent       String?  @map("user_agent")
+  aceitoEm        DateTime @default(now()) @map("aceito_em") @db.Timestamptz(3)
+
+  solicitacao SolicitacaoAceite @relation(fields: [solicitacaoId], references: [id])
+
+  @@unique([solicitacaoId, usuarioId])
+  @@map("aceite_documento")
 }

@@ -1,19 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { authenticator } from "otplib";
+import { entrarCom2fa } from "./util";
 
 const SENHA = process.env.E2E_SENHA ?? "";
 const TOTP = process.env.E2E_TOTP ?? "";
 
 test("IRPF: abre declaração, contribuinte envia pelo link sem login, simula", async ({ page, browser }) => {
   test.skip(!SENHA || !TOTP, "Defina E2E_SENHA e E2E_TOTP");
-  await page.goto("/entrar");
-  await page.getByLabel("E-mail").fill("admin@soluccini.local");
-  await page.getByLabel("Senha").fill(SENHA);
-  await page.getByRole("button", { name: "Entrar" }).click();
-  await page.waitForURL(/verificacao/);
-  await page.getByLabel("Código").fill(authenticator.generate(TOTP));
-  await page.getByRole("button", { name: "Confirmar" }).click();
-  await page.waitForURL(/\/$/);
+  await entrarCom2fa(page, "admin@soluccini.local", SENHA, TOTP);
 
   // Ano aleatório para o teste poder rodar de novo.
   const ano = 2030 + Math.floor(Math.random() * 60);

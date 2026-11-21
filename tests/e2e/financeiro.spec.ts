@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { authenticator } from "otplib";
+import { entrarCom2fa } from "./util";
 import path from "node:path";
 
 const SENHA = process.env.E2E_SENHA ?? "";
@@ -7,14 +7,7 @@ const TOTP = process.env.E2E_TOTP ?? "";
 
 test("financeiro: importa OFX, concilia automático, lança tarifa pela transação e vê relatório", async ({ page }) => {
   test.skip(!SENHA || !TOTP, "Defina E2E_SENHA e E2E_TOTP (admin com 2FA ativo)");
-  await page.goto("/entrar");
-  await page.getByLabel("E-mail").fill("admin@soluccini.local");
-  await page.getByLabel("Senha").fill(SENHA);
-  await page.getByRole("button", { name: "Entrar" }).click();
-  await page.waitForURL(/verificacao/);
-  await page.getByLabel("Código").fill(authenticator.generate(TOTP));
-  await page.getByRole("button", { name: "Confirmar" }).click();
-  await page.waitForURL(/\/$/);
+  await entrarCom2fa(page, "admin@soluccini.local", SENHA, TOTP);
 
   await page.getByRole("link", { name: "Financeiro (BPO)" }).first().click();
   await page.getByRole("link", { name: "Padaria Pão Quente Ltda" }).click();

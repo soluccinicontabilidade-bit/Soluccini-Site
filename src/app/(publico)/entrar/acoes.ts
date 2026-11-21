@@ -19,7 +19,7 @@ export async function acaoVerificar(_: EstadoForm, f: FormData): Promise<EstadoF
   if (!s) redirect("/entrar");
   const r = await confirmarSegundoFator(s, texto(f, "codigo"), await ipDaRequisicao());
   if (!r.ok) return { mensagem: r.mensagem, erros: { codigo: r.mensagem }, versao: Date.now() };
-  redirect("/");
+  redirect(s.usuario.perfil.startsWith("CLIENTE_") ? "/portal" : "/");
 }
 
 export async function acaoAtivar2fa(_: EstadoForm, f: FormData): Promise<EstadoForm> {

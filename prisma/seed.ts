@@ -12,6 +12,9 @@ import { aplicarSaldosIniciais, criarLancamento, lerCompetencia } from "../src/l
 import { contasQuePedemJustificativa, mudarSituacaoPeriodo } from "../src/lib/contabil/periodos";
 import { criarContaBancaria, criarTitulo, garantirCategoriasPadrao } from "../src/lib/financeiro/financeiro";
 import { criarDeclaracao } from "../src/lib/irpf/irpf";
+import { criarAcessoPortal } from "../src/lib/portal";
+import { criarTarefa } from "../src/lib/tarefas";
+import { pedirAprovacao } from "../src/lib/financeiro/financeiro";
 
 function dv(base: string, pesos: number[]) {
   const soma = pesos.reduce((s, p, i) => s + p * Number(base[i]), 0);
@@ -217,14 +220,37 @@ async function semearIrpf() {
   const ctx = { escritorioId: admin.escritorioId, usuarioId: admin.id, perfil: admin.perfil, origem: "seed" };
   const autor = { id: admin.id, escritorioId: admin.escritorioId, perfil: admin.perfil };
   await comEscritorio(ctx, async (tx) => {
-    if (await tx.declaracaoIRPF.count({ where: { anoCalendario: 2026 } })) {
-      console.log("Dados de demonstração já existem. Nada a fazer.");
-      return;
-    }
+    if (await tx.declaracaoIRPF.count({ where: { anoCalendario: 2026 } })) return;
     const mariana = await tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: "Mariana Souza" } } });
     const irene = await tx.usuario.findFirst({ where: { perfil: "ANALISTA_IRPF" } });
     await criarDeclaracao(tx, autor, { pessoaId: mariana.pessoaId, clienteId: mariana.id, ano: 2026, responsavelId: irene?.id, honorario: "450,00" });
     console.log("IRPF de demonstração criado: declaração 2026 da Mariana Souza.");
+  });
+  await semearPortal();
+}
+
+// Fases 6 e 7: Mariana aprova pagamentos da padaria no portal; tarefas e Pix de exemplo.
+async function semearPortal() {
+  const [admin] = await comAutenticacao({ email: "admin@soluccini.local" }, (tx) => tx.usuario.findMany({ where: { email: "admin@soluccini.local" } }));
+  const ctx = { escritorioId: admin.escritorioId, usuarioId: admin.id, perfil: admin.perfil, origem: "seed" };
+  const autor = { id: admin.id, escritorioId: admin.escritorioId, perfil: admin.perfil };
+  await comEscritorio(ctx, async (tx) => {
+    if (await tx.acessoCliente.count()) {
+      console.log("Dados de demonstração já existem. Nada a fazer.");
+      return;
+    }
+    const padaria = await tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: { startsWith: "Padaria" } } } });
+    const r = await criarAcessoPortal(tx, autor, padaria.id, { nome: "Mariana Souza", email: "mariana@portal.local", perfil: "CLIENTE_APROVADOR" });
+    if (process.env.SEED_SENHA && r.senhaTemporaria) {
+      const { gerarHashSenha } = await import("../src/lib/auth/senha");
+      await tx.usuario.update({ where: { email: "mariana@portal.local" } as never, data: { senhaHash: await gerarHashSenha(process.env.SEED_SENHA) } }).catch(() => undefined);
+    }
+    const prolabore = await tx.parcela.findFirst({ where: { clienteId: padaria.id, titulo: { descricao: "Pró-labore Mariana" } } });
+    if (prolabore) await pedirAprovacao(tx, autor, padaria.id, [prolabore.id]);
+    const contadora = await tx.usuario.findFirst({ where: { perfil: "CONTADOR" } });
+    await criarTarefa(tx, autor, { titulo: "Fechar o mês contábil da padaria", clienteId: padaria.id, responsavelId: contadora?.id, prazo: "2026-05-10", recorrencia: "MENSAL" });
+    await tx.configEscritorio.upsert({ where: { escritorioId: admin.escritorioId }, create: { escritorioId: admin.escritorioId, chavePix: "contato@soluccini.local", nomeRecebedor: "SOLUCCINI DEMONSTRACAO", cidadeRecebedor: "SAO PAULO" }, update: {} });
+    console.log(`Portal de demonstração: mariana@portal.local (aprovadora da padaria)${r.senhaTemporaria ? ` senha: ${process.env.SEED_SENHA || r.senhaTemporaria}` : ""}`);
   });
 }
 

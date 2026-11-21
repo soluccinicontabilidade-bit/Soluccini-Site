@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { authenticator } from "otplib";
+import { codigoNovo } from "./util";
 
 // Usa o banco de demonstração (npm run db:seed): padaria com jan fechado e fev em conferência.
 const SENHA_ADMIN = process.env.E2E_SENHA ?? "";
@@ -23,7 +24,7 @@ async function entrar(page: Page, email: string, senha: string) {
     await page.getByRole("button", { name: "Ativar" }).click();
     await page.getByRole("link", { name: "Já guardei, continuar" }).click();
   } else {
-    await page.getByLabel("Código").fill(authenticator.generate(segredos[email]));
+    await page.getByLabel("Código").fill(await codigoNovo(email, segredos[email]));
     await page.getByRole("button", { name: "Confirmar" }).click();
   }
   await expect(page.getByRole("heading", { level: 1, name: /Olá/ })).toBeVisible();

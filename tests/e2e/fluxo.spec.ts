@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { authenticator } from "otplib";
+import { codigoNovo } from "./util";
 
 const EMAIL = process.env.E2E_EMAIL ?? "admin@soluccini.local";
 const SENHA = process.env.E2E_SENHA ?? "";
@@ -28,7 +29,7 @@ async function entrar(page: Page) {
     await expect(page.locator(".codigos span")).toHaveCount(10);
     await page.getByRole("link", { name: "Já guardei, continuar" }).click();
   } else {
-    await page.getByLabel("Código").fill(authenticator.generate(segredo));
+    await page.getByLabel("Código").fill(await codigoNovo(EMAIL, segredo));
     await page.getByRole("button", { name: "Confirmar" }).click();
   }
   await expect(page.getByRole("heading", { level: 1, name: /Olá/ })).toBeVisible();

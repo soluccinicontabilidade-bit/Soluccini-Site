@@ -1,16 +1,17 @@
 // Regras de login, segundo fator e sessão, sem depender do Next.js (testável).
 import type { PerfilUsuario, Usuario } from "@prisma/client";
-import { comAutenticacao, comEscritorio, definirContexto, type Tx } from "@/lib/db";
+import { comAutenticacao, comEscritorio, definirContexto, prisma, type Tx } from "@/lib/db";
 import { cifrar, decifrarTexto, sha256, tokenAleatorio } from "@/lib/cripto";
 import { senhaConfere, verificarSenhaFicticia } from "./senha";
 import {
-  codigoTotpConfere,
+  passoDoCodigo,
   gerarCodigosRecuperacao,
   gerarSegredoTotp,
   normalizarCodigoRecuperacao,
 } from "./totp";
 
 export const MAX_TENTATIVAS = 5;
+export const MAX_TENTATIVAS_IP = 30; // por IP em 15 minutos, somando todos os e-mails
 export const BLOQUEIO_MINUTOS = 15;
 export const DURACAO_SESSAO_HORAS = 12;
 export const INATIVIDADE_MINUTOS = 120;
@@ -71,6 +72,13 @@ export type ResultadoLogin =
 export async function entrarComSenha(emailBruto: string, senha: string, ip?: string | null, userAgent?: string | null): Promise<ResultadoLogin> {
   const email = emailBruto.trim().toLowerCase();
   if (!email || !senha) return { ok: false, mensagem: MSG_INVALIDO };
+  if (ip) {
+    const recentes = await prisma.tentativaAcesso.count({ where: { ip, ocorridaEm: { gte: new Date(Date.now() - 15 * 60_000) } } });
+    if (recentes >= MAX_TENTATIVAS_IP) return { ok: false, mensagem: "Muitas tentativas a partir desta rede. Aguarde 15 minutos e tente de novo." };
+  }
+  const falhou = async () => {
+    if (ip) await prisma.tentativaAcesso.create({ data: { ip } });
+  };
 
   // Senha é verificada fora da transação (argon2 é lento de propósito).
   const candidatos = await comAutenticacao({ email, ip }, (tx) =>
@@ -78,6 +86,7 @@ export async function entrarComSenha(emailBruto: string, senha: string, ip?: str
   );
   if (candidatos.length === 0) {
     await verificarSenhaFicticia(senha);
+    await falhou();
     return { ok: false, mensagem: MSG_INVALIDO };
   }
 
@@ -97,6 +106,7 @@ export async function entrarComSenha(emailBruto: string, senha: string, ip?: str
     await comAutenticacao({ email, ip }, async (tx) => {
       for (const u of candidatos) await registrarFalha(tx, u, ip);
     });
+    await falhou();
     return { ok: false, mensagem: MSG_INVALIDO };
   }
 
@@ -161,7 +171,10 @@ export async function confirmarSegundoFator(sessao: SessaoAtual, codigo: string,
     let valido = false;
     const limpo = codigo.replace(/\s/g, "");
     if (/^\d{6}$/.test(limpo)) {
-      valido = codigoTotpConfere(decifrarTexto(u.totpSegredoCifrado), limpo);
+      const passo = passoDoCodigo(decifrarTexto(u.totpSegredoCifrado), limpo);
+      // Código já usado (mesma janela ou anterior) não vale de novo.
+      valido = passo !== null && (u.totpUltimoPasso === null || passo > u.totpUltimoPasso);
+      if (valido) await tx.usuario.update({ where: { id: u.id }, data: { totpUltimoPasso: passo } });
     } else {
       const hash = sha256(normalizarCodigoRecuperacao(codigo));
       const rec = await tx.codigoRecuperacao.findFirst({ where: { usuarioId: u.id, codigoHash: hash, usadoEm: null } });
@@ -199,7 +212,8 @@ export async function ativarTotp(sessao: SessaoAtual, codigo: string): Promise<{
     const u = await tx.usuario.findUniqueOrThrow({ where: { id: sessao.usuario.id } });
     if (u.totpAtivadoEm) return { ok: false as const, mensagem: "A verificação em duas etapas já está ativa." };
     if (!u.totpSegredoCifrado) return { ok: false as const, mensagem: "Recarregue a página para gerar um novo QR code." };
-    if (!codigoTotpConfere(decifrarTexto(u.totpSegredoCifrado), codigo)) {
+    const passo = passoDoCodigo(decifrarTexto(u.totpSegredoCifrado), codigo);
+    if (passo === null) {
       return { ok: false as const, mensagem: "Código não confere. Digite o código de 6 dígitos que aparece agora no aplicativo." };
     }
     const codigos = gerarCodigosRecuperacao();
@@ -207,7 +221,7 @@ export async function ativarTotp(sessao: SessaoAtual, codigo: string): Promise<{
     await tx.codigoRecuperacao.createMany({
       data: codigos.map((c) => ({ escritorioId: u.escritorioId, usuarioId: u.id, codigoHash: sha256(normalizarCodigoRecuperacao(c)) })),
     });
-    await tx.usuario.update({ where: { id: u.id }, data: { totpAtivadoEm: new Date() } });
+    await tx.usuario.update({ where: { id: u.id }, data: { totpAtivadoEm: new Date(), totpUltimoPasso: passo } });
     await tx.sessao.update({ where: { id: sessao.sessaoId }, data: { doisFatoresOk: true } });
     return { ok: true as const, codigos };
   });

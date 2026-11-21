@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpenCheck, Wallet, Receipt, Briefcase, FileUp, LayoutDashboard, UserCog, Users, UserRound } from "lucide-react";
+import { BookOpenCheck, Wallet, Receipt, CalendarCheck, HandCoins, Settings, Briefcase, FileUp, LayoutDashboard, UserCog, Users, UserRound } from "lucide-react";
 
-const ICONES = { irpf: Receipt, financeiro: Wallet, contabil: BookOpenCheck, painel: LayoutDashboard, clientes: Users, carteiras: Briefcase, equipe: UserCog, importar: FileUp, conta: UserRound };
+const ICONES = { tarefas: CalendarCheck, cobranca: HandCoins, config: Settings, irpf: Receipt, financeiro: Wallet, contabil: BookOpenCheck, painel: LayoutDashboard, clientes: Users, carteiras: Briefcase, equipe: UserCog, importar: FileUp, conta: UserRound };
 export type ItemNav = { href: string; rotulo: string; icone: keyof typeof ICONES; curto?: string };
 
 function ativo(caminho: string, href: string) {
