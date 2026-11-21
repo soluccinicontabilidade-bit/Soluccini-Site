@@ -41,7 +41,8 @@ export async function contasQuePedemJustificativa(tx: Tx, clienteId: string, com
   const fim = fimDoMes(competencia);
   const { contas, partidas } = await carregarBase(tx, clienteId, fim);
   const s = calcularSaldos(contas, partidas, competencia, fim);
-  const ligadas = new Set((await tx.contaBancaria.findMany({ where: { clienteId, contaContabilId: { not: null } }, select: { contaContabilId: true } })).map((b) => b.contaContabilId!));
+  // Só dispensa a justificativa quando a conta bancária já existia no mês (há conciliação a fechar).
+  const ligadas = new Set((await tx.contaBancaria.findMany({ where: { clienteId, contaContabilId: { not: null }, dataSaldoInicial: { lte: fim } }, select: { contaContabilId: true } })).map((b) => b.contaContabilId!));
   return contas
     .filter((c) => c.disponivel && c.analitica && !ligadas.has(c.id))
     .map((c) => ({ conta: c, mov: s.get(c.id)! }))

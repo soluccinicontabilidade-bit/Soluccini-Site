@@ -17,13 +17,14 @@ const ultimos = (): Record<string, number> => {
 
 export async function codigoNovo(email: string, segredo: string): Promise<string> {
   const u = ultimos();
-  let passo = Math.floor(Date.now() / 30_000);
-  while (u[email] !== undefined && passo <= u[email]) {
+  let agora = Date.now();
+  while (u[email] !== undefined && Math.floor(agora / 30_000) <= u[email]) {
     await new Promise((r) => setTimeout(r, 1000));
-    passo = Math.floor(Date.now() / 30_000);
+    agora = Date.now();
   }
-  writeFileSync(arquivo, JSON.stringify({ ...u, [email]: passo }));
-  return authenticator.generate(segredo);
+  // O código e o passo registrado vêm do mesmo instante.
+  writeFileSync(arquivo, JSON.stringify({ ...u, [email]: Math.floor(agora / 30_000) }));
+  return authenticator.clone({ epoch: agora }).generate(segredo);
 }
 
 export async function entrarCom2fa(page: Page, email: string, senha: string, segredo: string) {
@@ -34,5 +35,5 @@ export async function entrarCom2fa(page: Page, email: string, senha: string, seg
   await page.waitForURL(/verificacao/);
   await page.getByLabel("Código").fill(await codigoNovo(email, segredo));
   await page.getByRole("button", { name: "Confirmar" }).click();
-  await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
 }

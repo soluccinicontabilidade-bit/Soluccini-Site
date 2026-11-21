@@ -193,3 +193,13 @@ describe.skipIf(!temBanco)("financeiro, conciliação e contabilidade (banco rea
     expect((await e.A((tx) => sincronizarContabil(tx, a, e.clienteId, lerCompetencia("2026-03")))).criados).toBe(1);
   });
 });
+
+describe.skipIf(!temBanco)("fechamento contábil antes de a conta bancária existir", () => {
+  it("mês anterior ao saldo inicial do BPO continua exigindo justificativa da conta de banco", async () => {
+    const e = await cenario(); // conta Itaú começa em 01/03/2026, ligada à 1.1.1.02
+    const { contasQuePedemJustificativa } = await import("@/lib/contabil/periodos");
+    await e.A((tx) => criarLancamento(tx, e.autor(e.admin), e.clienteId, { data: "2026-02-10", historico: "Saldo", origem: "SALDO_INICIAL", partidas: [{ conta: "1.1.1.02", tipo: "DEBITO", valor: "100,00" }, { conta: "2.3.1.01", tipo: "CREDITO", valor: "100,00" }] }));
+    const fev = await e.A((tx) => contasQuePedemJustificativa(tx, e.clienteId, lerCompetencia("2026-02")));
+    expect(fev.map((x) => x.conta.codigo)).toEqual(["1.1.1.02"]);
+  });
+});

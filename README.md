@@ -5,15 +5,41 @@ Interface em português, com prioridade para o celular, seguindo o Brandbook SOL
 
 ## Situação por fase
 
-| Fase | Conteúdo | Situação |
+Todas as fases do escopo estão implementadas e testadas (110 testes automáticos + 6 de navegador).
+
+| Fase | Conteúdo |
+|---|---|
+| 1 | Acesso com 2FA, perfis, clientes, sócios, contratos, documentos, carteiras, importação de clientes |
+| 2 | Plano de contas, partidas dobradas, relatórios contábeis, fechamento mensal, apuração do resultado |
+| 3 | Financeiro BPO: contas, categorias, títulos com rateio/parcelas/recorrência, aprovação, baixas, extratos OFX |
+| 4 | Conciliação bancária (automática, N:M, regras aprendidas, fechamento) e contabilização do financeiro |
+| 5 | IRPF: funil, checklist, link de envio sem login, pró-labore/lucros vindos das empresas, simulador, tabelas por ano |
+| 6 | Portal do cliente, tarefas e obrigações, avisos, relatórios agendados, segurança reforçada, LGPD, backups |
+| 7 | Cobrança de honorários com Pix copia e cola e aceite eletrônico de documentos |
+
+## Variáveis de ambiente
+
+| Variável | Para quê | Obrigatória |
 |---|---|---|
-| 1 | Acesso com 2FA, perfis, escritório, clientes, sócios, contratos, documentos, carteiras, importação de clientes | **Pronta** |
-| 2 | Plano de contas, partidas dobradas, relatórios contábeis e fechamento | **Pronta** |
-| 3 | Financeiro BPO e extratos OFX | A fazer |
-| 4 | Conciliação bancária e ligação com a contabilidade | A fazer |
-| 5 | IRPF | A fazer |
-| 6 | Portal do cliente e painel | A fazer |
-| 7 | Cobrança (boleto/Pix) e assinatura | A fazer |
+| `DATABASE_URL` | Conexão da aplicação (usuário `app_user`, sem privilégios) | Sim |
+| `MIGRATE_DATABASE_URL` | Conexão do dono das tabelas, para migrações e backup | Sim |
+| `CHAVE_CIFRA`, `CHAVE_INDICE` | 32 bytes base64 (`openssl rand -base64 32`). Guarde no cofre: sem elas os dados cifrados não abrem | Sim |
+| `ARMAZENAMENTO` (+ `S3_*`) | `local` ou `s3` para os arquivos | Sim |
+| `APP_URL` | Endereço público (ex.: `https://sistema.soluccini.com.br`), usado nos links de envio do IRPF | Recomendado |
+| `ROTINAS_SEGREDO` | 32+ caracteres; protege `POST /api/rotinas` (avisos e relatórios agendados) | Recomendado |
+| `SMTP_URL`, `EMAIL_REMETENTE` | E-mail dos relatórios agendados. Sem isso, os relatórios só ficam no portal | Opcional |
+| `BACKUP_CHAVE` | Senha dos backups cifrados (`scripts/backup.sh`) | Para backup |
+
+## Rotinas que o servidor precisa agendar
+
+```bash
+# Todo dia, às 6h: avisos, relatórios agendados e limpeza
+curl -X POST -H "Authorization: Bearer $ROTINAS_SEGREDO" https://SEU_ENDERECO/api/rotinas
+# Todo dia, às 2h: backup cifrado (banco e arquivos)
+scripts/backup.sh /caminho/seguro/dos/backups
+# Todo mês: testar a restauração do backup mais recente
+scripts/testar-restauracao.sh /caminho/seguro/dos/backups
+```
 
 ## Contabilidade (fase 2)
 
@@ -86,7 +112,19 @@ public/marca/                 logotipo e símbolo extraídos do brandbook
 tests/                        unidade, integração (PostgreSQL) e ponta a ponta (Playwright)
 ```
 
-## Pendências conhecidas da fase 1
+## Fora do sistema (depende de decisão ou contratação)
+
+- **Boleto e aviso automático de pagamento:** o Pix copia e cola funciona sem intermediário, mas a baixa é
+  manual. Boleto e baixa automática exigem um provedor (banco ou intermediário de pagamentos).
+- **Assinatura com certificado ICP-Brasil:** hoje há aceite eletrônico simples no portal (com registro de
+  quem, quando, IP e hash do arquivo). Assinatura qualificada exige provedor.
+- **SPED (ECD, ECF, EFD), emissão de notas e folha:** fora do escopo; os dados estão estruturados para a
+  exportação SPED no futuro (inclusive o campo de conta referencial no plano de contas).
+- **Open Finance:** extratos entram por OFX; a camada de importação aceita outra fonte depois.
+- **IRPFM (imposto mínimo) e retenção de 10% sobre lucros acima de R$ 50 mil/mês:** o simulador avisa, mas
+  não calcula.
+
+## Pendências conhecidas
 
 - Envio de e-mail ainda não existe: a senha temporária aparece na tela para o administrador entregar.
 - Se a gravação no banco falhar depois do upload, o arquivo cifrado fica órfão no armazenamento (não é
