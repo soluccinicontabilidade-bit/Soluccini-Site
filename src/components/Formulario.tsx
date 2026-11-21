@@ -16,12 +16,14 @@ export function Formulario({
   className,
   limparAoConcluir = false,
   confirmar,
+  id,
 }: {
   acao: (anterior: EstadoForm, dados: FormData) => Promise<EstadoForm>;
   children: ReactNode;
   className?: string;
   limparAoConcluir?: boolean;
   confirmar?: string;
+  id?: string;
 }) {
   const [estado, despachar] = useActionState(acao, {});
   const [pendente, iniciar] = useTransition();
@@ -37,6 +39,7 @@ export function Formulario({
     <Ctx.Provider value={estado}>
       <form
         ref={ref}
+        id={id}
         className={className}
         aria-busy={pendente}
         onSubmit={(e) => {

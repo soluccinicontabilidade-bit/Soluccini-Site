@@ -13,6 +13,7 @@ export default async function LayoutInterno({ children }: { children: React.Reac
   const itens: ItemNav[] = [
     { href: "/", rotulo: "Painel", icone: "painel" },
     { href: "/clientes", rotulo: "Clientes", icone: "clientes" },
+    { href: "/financeiro", rotulo: "Financeiro (BPO)", curto: "Financeiro", icone: "financeiro" },
     { href: "/contabilidade", rotulo: "Contabilidade", curto: "Contábil", icone: "contabil" },
     ...(pode(usuario.perfil, "importacao.clientes") ? [{ href: "/importacoes", rotulo: "Importar planilhas", curto: "Importar", icone: "importar" as const }] : []),
     ...(pode(usuario.perfil, "carteiras.gerenciar") ? [{ href: "/carteiras", rotulo: "Carteiras", icone: "carteiras" as const }] : []),
@@ -20,7 +21,7 @@ export default async function LayoutInterno({ children }: { children: React.Reac
     { href: "/conta", rotulo: "Minha conta", curto: "Conta", icone: "conta" },
   ];
   // No celular cabem 5 itens; Carteiras e Equipe ficam acessíveis pelo painel.
-  const inferior = itens.filter((i) => !["/carteiras", "/equipe"].includes(i.href));
+  const inferior = itens.filter((i) => !["/carteiras", "/equipe", "/importacoes"].includes(i.href));
 
   return (
     <div className="app">

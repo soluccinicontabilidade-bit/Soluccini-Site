@@ -10,6 +10,7 @@ import { CATEGORIAS_PADRAO } from "../src/lib/documentos";
 import { copiarPlanoParaCliente, garantirModeloPadrao } from "../src/lib/contabil/plano";
 import { aplicarSaldosIniciais, criarLancamento, lerCompetencia } from "../src/lib/contabil/lancamentos";
 import { contasQuePedemJustificativa, mudarSituacaoPeriodo } from "../src/lib/contabil/periodos";
+import { criarContaBancaria, criarTitulo, garantirCategoriasPadrao } from "../src/lib/financeiro/financeiro";
 
 function dv(base: string, pesos: number[]) {
   const soma = pesos.reduce((s, p, i) => s + p * Number(base[i]), 0);
@@ -131,7 +132,7 @@ async function semearContabil() {
   const autor = { id: admin.id, escritorioId, perfil: admin.perfil };
   const feito = await comEscritorio(ctxAdmin, (tx) => tx.planoDeContas.count({ where: { clienteId: { not: null } } }));
   if (feito > 0) {
-    console.log("Dados de demonstração já existem. Nada a fazer.");
+    await semearFinanceiro();
     return;
   }
   const contador = await comEscritorio(ctxAdmin, (tx) => tx.usuario.findFirstOrThrow({ where: { perfil: "CONTADOR" } }));
@@ -177,6 +178,35 @@ async function semearContabil() {
     await mudarSituacaoPeriodo(tx, autorContador, padariaId, { competencia: lerCompetencia("2026-02"), para: "EM_CONFERENCIA" });
   }, { timeout: 60000 });
   console.log("Contabilidade de demonstração criada: padaria com saldos iniciais e lançamentos de jan a mar/2026 (janeiro fechado).");
+  await semearFinanceiro();
+}
+
+// Fase 3: BPO da padaria a partir de abril/2026 (conta Itaú, categorias e títulos).
+// O extrato de exemplo está em exemplos/extrato-padaria-2026-04.ofx.
+async function semearFinanceiro() {
+  const [admin] = await comAutenticacao({ email: "admin@soluccini.local" }, (tx) => tx.usuario.findMany({ where: { email: "admin@soluccini.local" } }));
+  const ctx = { escritorioId: admin.escritorioId, usuarioId: admin.id, perfil: admin.perfil, origem: "seed" };
+  const autor = { id: admin.id, escritorioId: admin.escritorioId, perfil: admin.perfil };
+  const feito = await comEscritorio(ctx, (tx) => tx.contaBancaria.count());
+  if (feito > 0) {
+    console.log("Dados de demonstração já existem. Nada a fazer.");
+    return;
+  }
+  await comEscritorio(ctx, async (tx) => {
+    const padaria = await tx.cliente.findFirstOrThrow({ where: { pessoa: { nome: { startsWith: "Padaria" } } } });
+    await garantirCategoriasPadrao(tx, autor, padaria.id);
+    const banco = await tx.contaContabil.findFirstOrThrow({ where: { plano: { clienteId: padaria.id }, codigo: "1.1.1.02" } });
+    // Saldo de abertura do BPO = saldo do banco na contabilidade em 31/03/2026.
+    const conta = await criarContaBancaria(tx, autor, padaria.id, { nome: "Itaú movimento", tipo: "CORRENTE", bancoCodigo: "341", agencia: "1234", numero: "56789-0", saldoInicial: "18.500,00", dataSaldoInicial: "2026-04-01", contaContabilId: banco.id });
+    const cat = async (nome: string) => (await tx.categoriaFinanceira.findFirstOrThrow({ where: { clienteId: padaria.id, nome } })).id;
+    const T = (e: Parameters<typeof criarTitulo>[3]) => criarTitulo(tx, autor, padaria.id, { contaPrevistaId: conta.id, ...e });
+    await T({ tipo: "PAGAR", descricao: "Aluguel da loja", favorecido: "Imobiliária Centro", competencia: "2026-04", valor: "4.500,00", primeiroVencimento: "2026-04-05", categoriaId: await cat("Aluguel"), repetirMeses: 2 });
+    await T({ tipo: "PAGAR", descricao: "Conta de energia", favorecido: "Enel", competencia: "2026-04", valor: "612,40", primeiroVencimento: "2026-04-10", categoriaId: await cat("Energia elétrica") });
+    await T({ tipo: "PAGAR", descricao: "Farinha e insumos", favorecido: "Moinho Trigo Bom Ltda", competencia: "2026-04", valor: "15.000,00", primeiroVencimento: "2026-04-20", categoriaId: await cat("Compra de mercadorias") });
+    await T({ tipo: "RECEBER", descricao: "Vendas no cartão (1ª quinzena)", favorecido: "Cielo", competencia: "2026-04", valor: "21.350,00", primeiroVencimento: "2026-04-15", categoriaId: await cat("Vendas de mercadorias") });
+    await T({ tipo: "PAGAR", descricao: "Pró-labore Mariana", favorecido: "Mariana Souza", documentoFavorecido: "12345678909", competencia: "2026-04", valor: "3.000,00", primeiroVencimento: "2026-05-05", categoriaId: await cat("Pró-labore") });
+  }, { timeout: 60000 });
+  console.log("Financeiro de demonstração criado: conta Itaú da padaria e títulos de abril/2026. Importe exemplos/extrato-padaria-2026-04.ofx para testar a conciliação.");
 }
 
 main()

@@ -150,7 +150,8 @@ describe.skipIf(!temBanco)("financeiro, conciliação e contabilidade (banco rea
     const mar = lerCompetencia("2026-03");
     await e.A(async (tx) => {
       const cc = async (codigo: string) => (await tx.contaContabil.findFirstOrThrow({ where: { plano: { clienteId: e.clienteId }, codigo } })).id;
-      await tx.configFinanceira.create({ data: { clienteId: e.clienteId, escritorioId: e.escritorioId, contaFornecedoresId: await cc("2.1.1.01"), contaClientesId: await cc("1.1.2.01"), contaJurosPagosId: await cc("5.2.1.02") } });
+      await tx.configFinanceira.update({ where: { clienteId: e.clienteId }, data: { contaFornecedoresId: await cc("2.1.1.01"), contaClientesId: await cc("1.1.2.01"), contaJurosPagosId: await cc("5.2.1.02") } });
+      // As categorias padrão já vêm ligadas ao modelo; o teste fixa as que usa.
       await tx.categoriaFinanceira.update({ where: { id: e.aluguel }, data: { contaContabilId: await cc("5.1.2.01") } });
       await tx.categoriaFinanceira.update({ where: { id: e.vendas }, data: { contaContabilId: await cc("3.1.1.03") } });
       // saldo inicial da conta também na contabilidade

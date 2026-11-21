@@ -67,6 +67,40 @@ const MODELO_CATEGORIAS: { nome: string; tipo: "RECEITA" | "DESPESA"; filhas: (s
   { nome: "Investimentos e sócios", tipo: "DESPESA", filhas: ["Compra de equipamentos", ["Distribuição de lucros", "DISTRIBUICAO_LUCROS"], "Pagamento de empréstimos"] },
 ];
 
+// Ligação sugerida categoria → conta do modelo padrão de plano de contas.
+const MAPA_MODELO: Record<string, string> = {
+  "Vendas de mercadorias": "3.1.1.01", "Vendas de produtos": "3.1.1.02", "Prestação de serviços": "3.1.1.03",
+  "Rendimentos de aplicações": "3.3.1.01", "Juros e descontos recebidos": "3.3.1.02", "Outras entradas": "3.3.2.01",
+  "Aporte dos sócios": "2.3.1.01", "Empréstimos recebidos": "2.1.5.01",
+  "Compra de mercadorias": "1.1.4.01", "Matéria-prima e insumos": "1.1.4.02", "Serviços de terceiros": "4.1.1.03",
+  "Salários": "5.1.1.01", "Pró-labore": "5.1.1.02", "Encargos (INSS, FGTS)": "5.1.1.03", "Benefícios": "5.1.1.04",
+  "Aluguel": "5.1.2.01", "Energia elétrica": "5.1.2.02", "Água": "5.1.2.03", "Telefone e internet": "5.1.2.04", "Honorários contábeis": "5.1.2.05",
+  "Sistemas e softwares": "5.1.2.07", "Material de escritório": "5.1.2.06", "Manutenção": "5.1.2.09",
+  "Marketing e publicidade": "5.1.3.01", "Comissões": "5.1.3.02", "Fretes": "5.1.3.03",
+  "Simples Nacional": "3.2.1.02", "Impostos sobre vendas": "3.2.1.02", "Taxas e outros tributos": "5.1.4.01", "IRPJ e CSLL": "5.3.1.01",
+  "Tarifas bancárias": "5.2.1.01", "Juros e multas pagos": "5.2.1.02", "Taxas de cartão": "5.2.1.01",
+  "Compra de equipamentos": "1.2.3.02", "Distribuição de lucros": "2.3.3.01", "Pagamento de empréstimos": "2.1.5.01",
+};
+const CONFIG_MODELO = { contaFornecedoresId: "2.1.1.01", contaClientesId: "1.1.2.01", contaJurosPagosId: "5.2.1.02", contaJurosRecebidosId: "3.3.1.02", contaDescontosConcedidosId: "5.2.1.03", contaDescontosObtidosId: "3.3.1.02" };
+
+/** Liga categorias e contas-ponte às contas do plano do cliente, quando ele segue o modelo padrão. */
+export async function ligarAoModeloContabil(tx: Tx, autor: Autor, clienteId: string) {
+  const contas = await tx.contaContabil.findMany({ where: { plano: { clienteId }, analitica: true } });
+  if (!contas.length) return 0;
+  const porCodigo = new Map(contas.map((c) => [c.codigo, c.id]));
+  let n = 0;
+  for (const cat of await tx.categoriaFinanceira.findMany({ where: { clienteId, contaContabilId: null, paiId: { not: null } } })) {
+    const id = porCodigo.get(MAPA_MODELO[cat.nome] ?? "");
+    if (id) {
+      await tx.categoriaFinanceira.update({ where: { id: cat.id }, data: { contaContabilId: id } });
+      n++;
+    }
+  }
+  const cfg = Object.fromEntries(Object.entries(CONFIG_MODELO).map(([k, cod]) => [k, porCodigo.get(cod) ?? null]));
+  await tx.configFinanceira.upsert({ where: { clienteId }, create: { clienteId, escritorioId: autor.escritorioId, ...cfg }, update: {} });
+  return n;
+}
+
 /** Cria as categorias padrão do cliente (se ainda não houver nenhuma). */
 export async function garantirCategoriasPadrao(tx: Tx, autor: Autor, clienteId: string) {
   await exigirCliente(tx, autor, clienteId);
@@ -79,6 +113,7 @@ export async function garantirCategoriasPadrao(tx: Tx, autor: Autor, clienteId: 
       await tx.categoriaFinanceira.create({ data: { escritorioId: autor.escritorioId, clienteId, paiId: pai.id, nome, tipo: g.tipo, especial, ordem: ordem++ } });
     }
   }
+  await ligarAoModeloContabil(tx, autor, clienteId);
 }
 
 export async function criarCategoria(tx: Tx, autor: Autor, clienteId: string, e: { nome: string; paiId?: string; tipo?: "RECEITA" | "DESPESA" }) {
